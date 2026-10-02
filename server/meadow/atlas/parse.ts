@@ -5,8 +5,8 @@ export type Route = { method: string; path: string; line: number };
 
 const LANG: Record<string, RegExp[]> = {
   js: [
-    /^\s*(export\s+)?(default\s+)?(async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)\s*\(/,
-    /^\s*(export\s+)?(const|let)\s+([A-Za-z_$][\w$]*)\s*(:[^=]+)?=\s*(async\s+)?(\([^)]*\)|[A-Za-z_$][\w$]*)\s*(:[^=]+)?=>/,
+    /^\s*(export\s+)?(default\s+)?(async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)\s*(<[^>]*>)?\s*\(/,
+    /^\s*(export\s+)?(const|let)\s+([A-Za-z_$][\w$]*)\s*(:[^=]+)?=\s*(async\s+)?(<[^>]*>)?\s*(\([^)]*\)|[A-Za-z_$][\w$]*)\s*(:[^=]+)?=>/,
     /^\s*(export\s+)?(default\s+)?(abstract\s+)?class\s+([A-Za-z_$][\w$]*)/,
     /^\s+(public\s+|private\s+|protected\s+|static\s+|async\s+)*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*(:\s*[^{]+)?\{\s*$/,
   ],

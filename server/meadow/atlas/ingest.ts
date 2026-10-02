@@ -3,10 +3,10 @@ import path from "node:path";
 import { getDb, now } from "../core/db";
 import { git } from "../core/git";
 import { containsSecret } from "../core/redact";
-import { getLlm } from "../llm/client";
 import { getProject } from "../projects";
 import { listProjectFiles } from "../rag/index";
 import { ingestConnectors } from "./connectors";
+import { tryEmbed } from "./llm";
 import { extractImports, extractRoutes, extractSymbols, extractTables, markdownSections, nameVariants, parseCompose, parseFrontMatter, parseOpenApi, parseTerraform, tableRefs } from "./parse";
 import { clearProjectGraph, GraphWriter, setEmbedding } from "./store";
 
@@ -276,7 +276,7 @@ export async function ingestProject(projectId: number, onProgress: IngestProgres
       const { meta, body } = parseFrontMatter(texts.get(file)!);
       const key = String(meta.id ?? path.basename(file).replace(/\.\w+$/, ""));
       const date = typeof meta.date === "string" ? meta.date : null;
-      const id = g.node("incident", key, String(meta.title ?? key), { path: file, validFrom: date, props: { severity: meta.severity ?? null, status: meta.status ?? null, date } });
+      const id = g.node("incident", key, meta.title ? `${key}: ${meta.title}` : key, { path: file, validFrom: date, props: { severity: meta.severity ?? null, status: meta.status ?? null, date } });
       stats.incidents += 1;
       const affected = Array.isArray(meta.services) ? meta.services : typeof meta.services === "string" ? [meta.services] : [];
       for (const name of affected) {
@@ -357,6 +357,12 @@ export async function ingestProject(projectId: number, onProgress: IngestProgres
       if (releaseId) g.edge(link.id, releaseId, "follows");
     }
 
+    const summarize = (kind: string, sql: string) => getDb().all<{ id: number; name: string; key: string; edges: string }>(sql, projectId).filter(row => row.edges).forEach(row => g.doc(row.id, kind, `${kind === "pr" ? "" : `${kind[0].toUpperCase()}${kind.slice(1)} `}${row.name}`, row.edges));
+    summarize("pr", `SELECT p.id, p.name, p.key, ifnull(json_extract(p.props_json, '$.title'), p.name) || char(10) || ifnull(group_concat(DISTINCT 'Changes ' || s.name), '') || char(10) || ifnull((SELECT group_concat(DISTINCT 'Modifies ' || f.path) FROM atlas_edges i2 JOIN atlas_edges m ON m.src = i2.dst AND m.kind = 'modifies' JOIN atlas_nodes f ON f.id = m.dst WHERE i2.src = p.id AND i2.kind = 'includes'), '') || char(10) || ifnull((SELECT group_concat(DISTINCT 'Released in ' || r.name) FROM atlas_edges i3 JOIN atlas_edges re ON re.src = i3.dst AND re.kind = 'released_in' JOIN atlas_nodes r ON r.id = re.dst WHERE i3.src = p.id AND i3.kind = 'includes'), '') edges
+      FROM atlas_nodes p LEFT JOIN atlas_edges e ON e.src = p.id AND e.kind = 'changes' LEFT JOIN atlas_nodes s ON s.id = e.dst WHERE p.project_id = ? AND p.kind = 'pr' GROUP BY p.id`);
+    summarize("team", `SELECT t.id, t.name, t.key, 'Team ' || t.name || ' owns ' || group_concat(s.name, ', ') || '.' edges FROM atlas_nodes t JOIN atlas_edges e ON e.dst = t.id AND e.kind = 'owned_by' JOIN atlas_nodes s ON s.id = e.src WHERE t.project_id = ? AND t.kind = 'team' GROUP BY t.id`);
+    summarize("person", `SELECT p.id, p.name, p.key, p.name || ' authored ' || COUNT(e.dst) || ' changes: ' || group_concat(json_extract(c.props_json, '$.subject'), '; ') edges FROM atlas_nodes p JOIN atlas_edges e ON e.src = p.id AND e.kind = 'authored' JOIN atlas_nodes c ON c.id = e.dst AND c.kind = 'commit' WHERE p.project_id = ? AND p.kind = 'person' GROUP BY p.id`);
+
     for (const [dir, name] of services) {
       const id = serviceIds.get(dir)!;
       const out = getDb().all<{ kind: string; name: string; nk: string }>("SELECT e.kind, n.name, n.kind nk FROM atlas_edges e JOIN atlas_nodes n ON n.id = e.dst WHERE e.src = ? AND n.kind IN ('service','api','table','team','infra','dependency')", id);
@@ -390,12 +396,8 @@ export async function embedDocs(projectId: number, limit = 4000): Promise<number
   let done = 0;
   for (let i = 0; i < rows.length; i += 32) {
     const batch = rows.slice(i, i + 32);
-    let vectors: number[][];
-    try {
-      vectors = await getLlm().embed(batch.map(row => `${row.title}\n${row.text}`.slice(0, 4000)));
-    } catch {
-      return done;
-    }
+    const vectors = await tryEmbed(batch.map(row => `${row.title}\n${row.text}`.slice(0, 4000)));
+    if (!vectors) return done;
     batch.forEach((row, j) => vectors[j] && setEmbedding(row.id, vectors[j]));
     done += batch.length;
   }

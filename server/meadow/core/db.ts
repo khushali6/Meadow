@@ -224,6 +224,25 @@ const MIGRATIONS: string[] = [
     finished_at TEXT NOT NULL
   );
   `,
+  `
+  CREATE TABLE atlas_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    investigation_id INTEGER,
+    tool TEXT NOT NULL,
+    title TEXT NOT NULL,
+    args_json TEXT NOT NULL,
+    status TEXT NOT NULL,
+    approval_id INTEGER,
+    result TEXT,
+    actor TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    finished_at TEXT
+  );
+  CREATE INDEX atlas_actions_project ON atlas_actions(project_id, id);
+  CREATE INDEX atlas_trace_investigation ON atlas_trace(investigation_id, id);
+  CREATE INDEX atlas_investigations_project ON atlas_investigations(project_id, id);
+  `,
 ];
 
 export type Row = Record<string, SQLInputValue>;

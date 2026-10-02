@@ -9,6 +9,7 @@ export const EVENT_TYPES = [
   "session_started", "thinking", "message", "tool_call", "file_edit", "command_run", "usage", "error", "done",
   "phase_started", "check_result", "phase_passed", "phase_blocked", "approval_requested", "approval_decided",
   "screenshot", "execution_started", "execution_finished", "plan_ready", "control", "guard",
+  "atlas_trace", "atlas_ingest",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

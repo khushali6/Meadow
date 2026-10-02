@@ -1,0 +1,59 @@
+import { getSecret } from "../config";
+import { getLlm, LlmError, type ChatMessage, type ChatOptions } from "../llm/client";
+
+const COOLDOWN_MS = 60_000;
+let failedAt = 0;
+let lastError = "";
+
+export type LlmUsage = { calls: number; tokensIn: number; tokensOut: number };
+export const emptyUsage = (): LlmUsage => ({ calls: 0, tokensIn: 0, tokensOut: 0 });
+
+/** True when the gateway has a key and has not failed recently. Every caller must have a deterministic fallback. */
+export function llmAvailable(): boolean {
+  if (process.env.MEADOW_ATLAS_NO_LLM) return false;
+  if (!getSecret("FREELLMAPI_API_KEY") && !process.env.MEADOW_ATLAS_FORCE_LLM) return false;
+  return Date.now() - failedAt > COOLDOWN_MS;
+}
+
+export const llmStatus = () => ({ available: llmAvailable(), lastError: lastError || null });
+
+export async function tryChat(messages: ChatMessage[], usage: LlmUsage, options: ChatOptions = {}): Promise<string | null> {
+  if (!llmAvailable()) return null;
+  try {
+    const result = await getLlm().chat(messages, { temperature: 0.1, maxTokens: 1200, ...options });
+    usage.calls += 1;
+    usage.tokensIn += result.tokensIn;
+    usage.tokensOut += result.tokensOut;
+    return result.text;
+  } catch (error) {
+    failedAt = Date.now();
+    lastError = error instanceof LlmError ? error.message : String(error);
+    return null;
+  }
+}
+
+export async function tryJson<T>(messages: ChatMessage[], usage: LlmUsage, validate: (value: unknown) => T | null, options: ChatOptions = {}): Promise<T | null> {
+  const text = await tryChat(messages, usage, { json: true, ...options });
+  if (!text) return null;
+  try {
+    const start = text.search(/[[{]/);
+    const end = Math.max(text.lastIndexOf("}"), text.lastIndexOf("]"));
+    return validate(JSON.parse(text.slice(start, end + 1)));
+  } catch {
+    return null;
+  }
+}
+
+export async function tryEmbed(texts: string[]): Promise<number[][] | null> {
+  if (!llmAvailable()) return null;
+  try {
+    return await getLlm().embed(texts);
+  } catch (error) {
+    failedAt = Date.now();
+    lastError = String((error as Error).message ?? error);
+    return null;
+  }
+}
+
+/** Rough token estimate used for budget reporting when the gateway does not return usage. */
+export const approxTokens = (text: string) => Math.ceil(text.length / 4);
