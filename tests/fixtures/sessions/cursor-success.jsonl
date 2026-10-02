@@ -1,0 +1,12 @@
+{"type":"system","subtype":"init","apiKeySource":"login","cwd":"/tmp/project","session_id":"c6b62c6f-7ead-4fd6-9922-e952131177ff","model":"Claude 4 Sonnet","permissionMode":"default"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Build phase 1"}]},"session_id":"c6b62c6f-7ead-4fd6-9922-e952131177ff"}
+{"type":"thinking","subtype":"delta","text":"Let me","session_id":"c6b62c6f-7ead-4fd6-9922-e952131177ff"}
+{"type":"thinking","subtype":"completed","session_id":"c6b62c6f-7ead-4fd6-9922-e952131177ff"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I'll create the entry file and run the checks."}]},"session_id":"c6b62c6f-7ead-4fd6-9922-e952131177ff"}
+{"type":"tool_call","subtype":"started","call_id":"toolu_1","tool_call":{"readToolCall":{"args":{"path":"package.json"}}},"session_id":"c6b62c6f-7ead-4fd6-9922-e952131177ff"}
+{"type":"tool_call","subtype":"completed","call_id":"toolu_1","tool_call":{"readToolCall":{"args":{"path":"package.json"},"result":{"success":{"content":"{}","isEmpty":false,"exceededLimit":false,"totalLines":1,"totalChars":2}}}},"session_id":"c6b62c6f-7ead-4fd6-9922-e952131177ff"}
+{"type":"tool_call","subtype":"completed","call_id":"toolu_2","tool_call":{"writeToolCall":{"args":{"path":"src/index.js","fileText":"console.log('hi')\n"},"result":{"success":{"path":"src/index.js","linesCreated":1,"fileSize":18}}}},"session_id":"c6b62c6f-7ead-4fd6-9922-e952131177ff"}
+{"type":"tool_call","subtype":"completed","call_id":"toolu_3","tool_call":{"shellToolCall":{"args":{"command":"node src/index.js"},"result":{"success":{"exitCode":0,"stdout":"hi\n"}}}},"session_id":"c6b62c6f-7ead-4fd6-9922-e952131177ff"}
+{"type":"some_future_event","payload":{"x":1}}
+not even json
+{"type":"result","subtype":"success","duration_ms":5234,"duration_api_ms":5234,"is_error":false,"result":"Files changed: src/index.js. Checks: node src/index.js passed.","session_id":"c6b62c6f-7ead-4fd6-9922-e952131177ff","request_id":"10e11780-df2f-45dc-a1ff-4540af32e9c0"}

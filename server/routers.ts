@@ -1,40 +1,126 @@
 import { z } from "zod";
-import { getSessionCookieOptions } from "./_core/cookies";
-import { COOKIE_NAME } from "@shared/const";
-import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
-import { addNote, controlRun, createProject, decideApproval, snapshot, startRun, updateSettings, validatePlan } from "./meadow";
+import { telegram, createPairingCode } from "./meadow/channels/telegram";
+import { getSecret, loadConfig, saveConfig, setSecret } from "./meadow/config";
+import { decide, listApprovals } from "./meadow/core/approvals";
+import { fullDoctor, llmStatus } from "./meadow/doctor";
+import { engineNames, ENGINE_LABELS } from "./meadow/engines/registry";
+import { harness } from "./meadow/harness/runner";
+import { handleAction, handleText } from "./meadow/intake/conversation";
+import { improvePlan } from "./meadow/intake/llm";
+import { parsePlan } from "./meadow/planning/format";
+import { addNote, approvePlan, createProject, getPlan, getProject, savePlanVersion, updateProject } from "./meadow/projects";
+import { indexMemory, indexProject, search } from "./meadow/rag/index";
+import { notesFor, phaseDiff, phaseEvidence, planHistory, projectDetail, projectsOverview, usageToday } from "./meadow/service";
+import { captureOnDemand } from "./meadow/visual/ondemand";
 
-const settingsSchema = z.object({
-  notificationLevel: z.enum(["all", "phases", "failures"]).optional(),
-  screenshotEnabled: z.boolean().optional(),
-  previewUrl: z.string().optional(),
-  budget: z.number().min(100).max(100000).optional(),
-  quietHours: z.boolean().optional(),
-  theme: z.enum(["light", "dark"]).optional(),
+const DASHBOARD = { channel: "dashboard", chat: "local" } as const;
+
+const configPatch = z.object({
+  engine: z.object({ default: z.enum(["cursor", "claude_code", "fake"]), model: z.string().nullable(), runTimeoutS: z.number().min(60).max(6 * 3600), noOutputTimeoutS: z.number().min(30).max(3600), claudeUseFreeLlmApi: z.boolean() }).partial().optional(),
+  harness: z.object({ maxAttempts: z.number().int().min(1).max(10), checkTimeoutS: z.number().min(10).max(7200), massDeleteThreshold: z.number().int().min(1), phaseGate: z.enum(["auto", "ask"]) }).partial().optional(),
+  budget: z.object({ phaseTokens: z.number().int().min(1000), dailyTokens: z.number().int().min(1000), phaseWallClockS: z.number().int().min(60) }).partial().optional(),
+  telegram: z.object({ notificationLevel: z.enum(["all", "phases", "failures"]), quietHours: z.object({ enabled: z.boolean(), start: z.number().int().min(0).max(23), end: z.number().int().min(0).max(23) }), voiceReplies: z.boolean() }).partial().optional(),
+  screenshots: z.object({ enabled: z.boolean() }).partial().optional(),
+  llm: z.object({ baseUrl: z.string().url(), model: z.string().min(1) }).partial().optional(),
+  approvals: z.object({ expiryS: z.number().int().min(60) }).partial().optional(),
 });
 
+function safeSettings() {
+  const config = loadConfig();
+  return {
+    config,
+    secrets: { freellmapi: Boolean(getSecret("FREELLMAPI_API_KEY")), telegram: Boolean(getSecret("TELEGRAM_BOT_TOKEN")) },
+    engines: engineNames().map(name => ({ name, label: ENGINE_LABELS[name as keyof typeof ENGINE_LABELS] ?? name })),
+  };
+}
+
 export const appRouter = router({
-  system: systemRouter,
-  auth: router({
-    me: publicProcedure.query(opts => opts.ctx.user),
-    logout: publicProcedure.mutation(({ ctx }) => {
-      const cookieOptions = getSessionCookieOptions(ctx.req);
-      ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
-      return { success: true } as const;
-    }),
+  overview: publicProcedure.query(() => ({
+    projects: projectsOverview(),
+    approvals: listApprovals(100),
+    telegram: telegram.status(),
+    usage: usageToday(),
+  })),
+  project: publicProcedure.input(z.object({ id: z.number() })).query(({ input }) => projectDetail(input.id)),
+  phaseEvidence: publicProcedure.input(z.object({ phaseId: z.number() })).query(({ input }) => phaseEvidence(input.phaseId)),
+  phaseDiff: publicProcedure.input(z.object({ phaseId: z.number() })).query(({ input }) => phaseDiff(input.phaseId)),
+
+  createProject: publicProcedure.input(z.object({ name: z.string().min(2).max(48), engine: z.string(), description: z.string().max(500).optional() })).mutation(({ input }) => createProject(input)),
+  updateProject: publicProcedure.input(z.object({ id: z.number(), engine: z.string().optional(), screenshots: z.boolean().optional(), description: z.string().optional() })).mutation(({ input }) => {
+    if (input.engine && !engineNames().includes(input.engine)) throw new Error(`Unknown engine ${input.engine}`);
+    return updateProject(input.id, { engine: input.engine, description: input.description, screenshots: input.screenshots === undefined ? undefined : input.screenshots ? 1 : 0 });
   }),
-  meadow: router({
-    snapshot: publicProcedure.query(() => snapshot()),
-    createProject: publicProcedure.input(z.object({ name: z.string().min(2), engine: z.string().min(1), description: z.string().optional() })).mutation(({ input }) => createProject(input)),
-    startRun: publicProcedure.input(z.object({ projectId: z.string() })).mutation(({ input }) => startRun(input.projectId)),
-    controlRun: publicProcedure.input(z.object({ runId: z.string(), action: z.enum(["pause", "resume", "stop", "retry", "rollback"]) })).mutation(({ input }) => controlRun(input.runId, input.action)),
-    decideApproval: publicProcedure.input(z.object({ id: z.string(), decision: z.enum(["approved", "denied"]) })).mutation(({ input }) => decideApproval(input.id, input.decision)),
-    addNote: publicProcedure.input(z.object({ title: z.string().min(2), body: z.string().min(2) })).mutation(({ input }) => addNote(input)),
-    updateSettings: publicProcedure.input(settingsSchema).mutation(({ input }) => updateSettings(input)),
-    validatePlan: publicProcedure.input(z.object({ markdown: z.string() })).mutation(({ input }) => validatePlan(input.markdown)),
-    doctor: publicProcedure.query(() => ({ checkedAt: new Date().toISOString(), engines: [{ name: "Cursor CLI", state: "ready", detail: "Adapter configured · local binary detected by the daemon" }, { name: "Claude Code", state: "optional", detail: "Optional adapter · connect an existing subscription" }, { name: "Gemini CLI", state: "optional", detail: "Free tier adapter · not configured" }, { name: "OpenCode", state: "optional", detail: "Community adapter · not configured" }] })),
+
+  validatePlan: publicProcedure.input(z.object({ markdown: z.string().max(500_000) })).mutation(({ input }) => {
+    const result = parsePlan(input.markdown);
+    return { ok: result.ok, errors: result.errors, warnings: result.warnings, phases: result.ok ? result.plan.phases.map(phase => ({ id: phase.id, name: phase.name, dependsOn: phase.dependsOn, checks: phase.checks.length })) : [] };
   }),
+  savePlan: publicProcedure.input(z.object({ projectId: z.number(), markdown: z.string().max(500_000) })).mutation(({ input }) => savePlanVersion(input.projectId, input.markdown, { source: "user" })),
+  approvePlan: publicProcedure.input(z.object({ planId: z.number(), start: z.boolean().default(true) })).mutation(async ({ input }) => {
+    const plan = await approvePlan(input.planId);
+    if (input.start) await harness.start(plan.project_id);
+    return plan;
+  }),
+  improvePlan: publicProcedure.input(z.object({ planId: z.number() })).mutation(async ({ input }) => {
+    const plan = getPlan(input.planId);
+    return savePlanVersion(plan.project_id, await improvePlan(plan.raw_md), { source: "suggested" });
+  }),
+  planHistory: publicProcedure.input(z.object({ projectId: z.number() })).query(({ input }) => planHistory(input.projectId)),
+
+  control: publicProcedure.input(z.object({ projectId: z.number(), action: z.enum(["start", "pause", "resume", "stop", "retry", "skip", "rollback"]), hint: z.string().max(4000).optional(), engine: z.string().optional() })).mutation(async ({ input }) => {
+    switch (input.action) {
+      case "start":
+      case "resume":
+        return { executionId: await harness.start(input.projectId, { engine: input.engine }) };
+      case "pause":
+        harness.pause(input.projectId);
+        return {};
+      case "stop":
+        await harness.stop(input.projectId);
+        return {};
+      case "retry":
+        return { executionId: await harness.retry(input.projectId, input.hint) };
+      case "skip":
+        await harness.skipPhase(input.projectId);
+        return {};
+      case "rollback":
+        await harness.rollback(input.projectId);
+        return {};
+    }
+  }),
+
+  decideApproval: publicProcedure.input(z.object({ id: z.number(), decision: z.enum(["approved", "denied"]) })).mutation(({ input }) => decide(input.id, input.decision, "dashboard")),
+
+  notes: publicProcedure.input(z.object({ projectId: z.number().nullable() })).query(({ input }) => notesFor(input.projectId)),
+  addNote: publicProcedure.input(z.object({ projectId: z.number().nullable(), title: z.string().min(1).max(200), body: z.string().min(1).max(20_000) })).mutation(async ({ input }) => {
+    const id = addNote({ ...input, source: "dashboard" });
+    if (input.projectId) await indexMemory(input.projectId, input.title, `${input.title}\n${input.body}`);
+    return { id };
+  }),
+  search: publicProcedure.input(z.object({ projectId: z.number(), query: z.string().min(1).max(500) })).query(({ input }) => search(input.projectId, input.query, 10)),
+  reindex: publicProcedure.input(z.object({ projectId: z.number() })).mutation(({ input }) => indexProject(input.projectId, getProject(input.projectId).path)),
+  shot: publicProcedure.input(z.object({ projectId: z.number(), route: z.string().nullable() })).mutation(({ input }) => captureOnDemand(input.projectId, input.route)),
+
+  chat: publicProcedure.input(z.object({ text: z.string().min(1).max(100_000) })).mutation(({ input }) => handleText(DASHBOARD.channel, DASHBOARD.chat, input.text)),
+  chatAction: publicProcedure.input(z.object({ action: z.string().max(200) })).mutation(({ input }) => handleAction(DASHBOARD.channel, DASHBOARD.chat, input.action, "dashboard")),
+
+  settings: publicProcedure.query(() => safeSettings()),
+  updateSettings: publicProcedure.input(configPatch).mutation(({ input }) => {
+    saveConfig(input);
+    return safeSettings();
+  }),
+  setSecret: publicProcedure.input(z.object({ name: z.enum(["FREELLMAPI_API_KEY", "TELEGRAM_BOT_TOKEN"]), value: z.string().min(8).max(500) })).mutation(async ({ input }) => {
+    setSecret(input.name, input.value.trim());
+    if (input.name === "TELEGRAM_BOT_TOKEN") {
+      telegram.stop();
+      await telegram.start();
+    }
+    return safeSettings();
+  }),
+  pairTelegram: publicProcedure.mutation(() => ({ code: createPairingCode(), bot: telegram.status().bot })),
+  doctor: publicProcedure.query(() => fullDoctor()),
+  llmStatus: publicProcedure.query(() => llmStatus()),
 });
 
 export type AppRouter = typeof appRouter;
