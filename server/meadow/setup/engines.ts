@@ -261,6 +261,11 @@ export async function installEngine(name: string) {
   return { status: job.status, detail: job.detail };
 }
 
+export function engineJob(name: string) {
+  const job = jobs.get(name);
+  return job ? { kind: job.kind, status: job.status, detail: job.detail, url: job.url } : null;
+}
+
 export function cancelEngineJob(name: string) {
   const job = jobs.get(name);
   if (job?.child) killTree(job.child);

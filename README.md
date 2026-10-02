@@ -33,6 +33,22 @@ The agent's own thinking (clarifying questions, specs, plans, summaries) uses th
 
 ## Quick start
 
+From a checkout, one command does everything before your first project:
+
+```bash
+./startup.sh                        # macOS, Linux, WSL, Git Bash
+powershell -ExecutionPolicy Bypass -File .\startup.ps1   # Windows
+```
+
+It checks Node.js (and offers to install Node 24 through fnm, nvm, Volta, Homebrew or winget), installs dependencies, builds, then runs `meadow setup`:
+
+1. **Keys**: saves any `TELEGRAM_BOT_TOKEN`, `CURSOR_API_KEY`, `FREELLMAPI_API_KEY`, `AGENT_*`, `OPENROUTER_API_KEY`, `GITHUB_TOKEN`, ... found in your environment or in `--env-file keys.env` to `~/.meadow/secrets.env` (mode 600). It can also reuse your GitHub CLI login, if you say yes.
+2. **Agent model**: uses the best detected server and tests it with a real request. If Ollama is installed but stopped, it starts it. If Ollama has no usable model, it offers to download one that fits your RAM. Otherwise it asks for one API key and works out the provider from it.
+3. **Coding engine**: lists what's installed and signed in, asks which engine to use, installs it if needed, and runs its browser sign-in. You can paste a key instead.
+4. **Telegram**: opens @BotFather, validates the token you paste with Telegram, then opens your bot with a pairing link and waits until you tap Start.
+
+Then it starts Meadow and opens the dashboard. Run it again any time; working parts are kept. Options: `--yes` (no questions; also accepts installs and downloads), `--env-file F`, `--no-start`, `--skip-model`, `--skip-engine`, `--skip-telegram`. Without a terminal and without `--yes`, it never installs, downloads or opens a sign-in.
+
 Meadow isn't on the npm registry yet. Install it from a release tarball:
 
 ```bash

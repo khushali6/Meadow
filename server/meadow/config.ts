@@ -201,6 +201,11 @@ export function getSecret(name: SecretName): string | undefined {
   return process.env[name] || readSecretsFile()[name] || undefined;
 }
 
+/** The value saved in secrets.env only, ignoring the environment. */
+export function storedSecret(name: SecretName): string | undefined {
+  return readSecretsFile()[name] || undefined;
+}
+
 export function setSecret(name: SecretName, value: string) {
   const secrets = readSecretsFile();
   secrets[name] = value;

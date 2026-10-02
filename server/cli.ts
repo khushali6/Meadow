@@ -16,6 +16,9 @@ import { exportBundle, statusText } from "./meadow/service";
 const HELP = `meadow — local-first agent that builds and tests code phase by phase
 
 Usage:
+  meadow setup [--yes] [--env-file F] One-time setup, no project needed: saves keys from the environment or F,
+                                      picks and tests a model, installs and signs in a coding engine, pairs Telegram
+                                      (--skip-model, --skip-engine, --skip-telegram)
   meadow init                         Guided setup: detects this repo, model providers, builds the graph, runs checks
   meadow update [--yes]               Check for a signed update, verify it, back up and install
   meadow doctor                       Check engines, agent model, memory, git and optional extras
@@ -177,6 +180,49 @@ async function init() {
   console.log(`\nNext: \`meadow start\`${registered ? `, then review the plan for ${registered}` : ""}.`);
 }
 
+/** `meadow setup`: everything Meadow needs before any project exists. Safe to run again; finished parts are kept. */
+async function setup(args: string[]): Promise<number> {
+  const { runSetup } = await import("./meadow/setup/bootstrap");
+  const interactive = Boolean(process.stdin.isTTY) && !args.includes("--yes") && !args.includes("--non-interactive");
+  const rl = interactive ? createInterface({ input: process.stdin, output: process.stdout, terminal: true }) : null;
+  let muted = false;
+  if (rl) {
+    const out = rl as unknown as { _writeToOutput: (text: string) => void };
+    out._writeToOutput = text => {
+      if (!muted) process.stdout.write(text);
+      else if (/[\r\n]/.test(text)) process.stdout.write("\n");
+      else process.stdout.write("*".repeat(text.length));
+    };
+  }
+  const ask = async (question: string, fallback = "", options: { secret?: boolean } = {}) => {
+    if (!rl) return fallback;
+    const prompt = fallback ? `${question} [${fallback}]: ` : `${question}: `;
+    process.stdout.write(prompt);
+    muted = Boolean(options.secret);
+    try {
+      return (await rl.question("")).trim() || fallback;
+    } finally {
+      muted = false;
+    }
+  };
+  const waitOrSkip = async <T,>(work: Promise<T>, prompt: string): Promise<T | null> => {
+    if (!rl) return work;
+    const abort = new AbortController();
+    const skipped = rl.question(`${prompt}\n`, { signal: abort.signal }).then(() => null, () => null);
+    const result = await Promise.race([work, skipped]);
+    abort.abort();
+    return result;
+  };
+  const skip = (["model", "engine", "telegram"] as const).filter(step => args.includes(`--skip-${step}`));
+  try {
+    const results = await runSetup({ interactive, yes: args.includes("--yes"), log: (line = "") => console.log(line), ask, waitOrSkip }, { envFile: flag(args, "--env-file"), skip: [...skip] });
+    console.log(`\nNext: \`meadow start\` opens the dashboard. Add a project there, or run \`meadow init\` inside a repository.`);
+    return results.engine === false ? 2 : 0;
+  } finally {
+    rl?.close();
+  }
+}
+
 function printEvent(event: MeadowEvent) {
   const time = event.ts.slice(11, 19);
   const detail = ["check_result", "phase_blocked", "error"].includes(event.type) && event.detail ? `\n    ${event.detail.split("\n").slice(0, 8).join("\n    ")}` : "";
@@ -329,6 +375,8 @@ async function main() {
     case "init":
       await init();
       return 0;
+    case "setup":
+      return setup(args);
     case "doctor":
       return (await doctor()) ? 0 : 1;
     case "start": {
