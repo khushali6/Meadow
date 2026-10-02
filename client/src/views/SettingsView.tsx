@@ -61,6 +61,8 @@ export function SettingsView({ settings, overview, project }: { settings: Settin
   const { config, secrets } = settings;
   const patch = (value: Patch) => update.mutate(value);
   const tg = overview?.telegram;
+  const activeEngine = project?.engine ?? config.engine.default;
+  const engineLabel = (name: string) => settings.engines.find(engine => engine.name === name)?.label ?? name;
 
   return (
     <>
@@ -82,6 +84,17 @@ export function SettingsView({ settings, overview, project }: { settings: Settin
       <Section title="Coding engine" description="The tool that actually edits code. Meadow drives it phase by phase and verifies every result.">
         <Row label="Default engine"><select value={config.engine.default} onChange={event => patch({ engine: { default: event.target.value as typeof config.engine.default } })}>{settings.engines.map(engine => <option key={engine.name} value={engine.name}>{engine.label}</option>)}</select></Row>
         {project ? <Row label={`Engine for ${project.name}`}><select value={project.engine} onChange={event => updateProject.mutate({ id: project.id, engine: event.target.value })}>{settings.engines.map(engine => <option key={engine.name} value={engine.name}>{engine.label}</option>)}</select></Row> : null}
+        <Row label={`Model for ${engineLabel(activeEngine)}`} hint="Leave empty for the engine's own default. With a local gateway, use a model it serves.">
+          <input key={activeEngine} className="text-input" placeholder="engine default" defaultValue={config.engine.models?.[activeEngine as keyof typeof config.engine.models] ?? ""} onBlur={event => {
+            const value = event.target.value.trim() || null;
+            if (value !== (config.engine.models?.[activeEngine as keyof typeof config.engine.models] ?? null)) patch({ engine: { models: { ...config.engine.models, [activeEngine]: value } } });
+          }} />
+        </Row>
+        {activeEngine === "custom" ? (
+          <Row label="Custom command" hint={'Set engine.custom.command in ~/.meadow/config.json. It gets the prompt as $MEADOW_PROMPT and $MEADOW_PROMPT_FILE.'}>
+            <code className="inline-code">{config.engine.custom.command || "not set"}</code>
+          </Row>
+        ) : null}
         <Row label="Route Claude Code through FreeLLMAPI" hint="Claude Code uses your gateway instead of an Anthropic key."><Toggle checked={config.engine.claudeUseFreeLlmApi} onChange={value => patch({ engine: { claudeUseFreeLlmApi: value } })} label="Route Claude Code through FreeLLMAPI" /></Row>
         <Row label="Engine run timeout"><NumberInput value={config.engine.runTimeoutS} min={60} suffix="s" onCommit={value => patch({ engine: { runTimeoutS: value } })} /></Row>
         <Row label="Kill if silent for"><NumberInput value={config.engine.noOutputTimeoutS} min={30} suffix="s" onCommit={value => patch({ engine: { noOutputTimeoutS: value } })} /></Row>
@@ -112,7 +125,7 @@ export function SettingsView({ settings, overview, project }: { settings: Settin
           </Row>
         ) : null}
         {pair.data ? <div className="pair-code"><span>Send this to {pair.data.bot ? `@${pair.data.bot}` : "your bot"}:</span><code>/pair {pair.data.code}</code></div> : null}
-        <Row label="Notifications"><select value={config.telegram.notificationLevel} onChange={event => patch({ telegram: { notificationLevel: event.target.value as "all" | "phases" | "failures" } })}><option value="all">Everything</option><option value="phases">Phase results</option><option value="failures">Only problems</option></select></Row>
+        <Row label="Notifications"><select value={config.telegram.notificationLevel} onChange={event => patch({ telegram: { notificationLevel: event.target.value as "all" | "phases" | "failures" } })}><option value="all">Everything, with a live progress card</option><option value="phases">Phase starts and results</option><option value="failures">Only problems</option></select></Row>
         <Row label="Quiet hours" hint="Non-urgent updates are held until the window ends.">
           <Toggle checked={config.telegram.quietHours.enabled} onChange={value => patch({ telegram: { quietHours: { ...config.telegram.quietHours, enabled: value } } })} label="Quiet hours" />
           <NumberInput value={config.telegram.quietHours.start} min={0} suffix=":00 to" onCommit={value => patch({ telegram: { quietHours: { ...config.telegram.quietHours, start: Math.min(23, Math.max(0, Math.round(value))) } } })} />

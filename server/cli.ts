@@ -62,8 +62,15 @@ async function init() {
   const llm = await llmStatus();
   console.log(`  ${mark(llm.ok)} ${llm.detail}`);
 
-  const engine = (await ask("Default engine (cursor | claude_code | fake)", config.engine.default)) as EngineName;
+  const engine = (await ask("Default engine (cursor | claude_code | codex | gemini | custom | fake)", config.engine.default)) as EngineName;
   saveConfig({ engine: { default: engine } });
+  if (engine === "custom") {
+    const command = await ask('Command to run (gets $MEADOW_PROMPT / $MEADOW_PROMPT_FILE), e.g. aider --yes-always --message-file "$MEADOW_PROMPT_FILE"', config.engine.custom.command);
+    const label = await ask("Name to show for it", config.engine.custom.label);
+    saveConfig({ engine: { custom: { command, label } } });
+  }
+  const model = await ask(`Model for ${engine} (blank = engine default)`, config.engine.models?.[engine] ?? "");
+  saveConfig({ engine: { models: { [engine]: model || null } } });
   if (engine === "claude_code") {
     const viaGateway = (await ask("Route Claude Code through FreeLLMAPI (free models)? (y/N)", "n")).toLowerCase() === "y";
     saveConfig({ engine: { claudeUseFreeLlmApi: viaGateway } });

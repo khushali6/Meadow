@@ -61,8 +61,8 @@ export class TelegramApi {
     return this.call<TgUpdate[]>("getUpdates", { offset, timeout: timeoutS, allowed_updates: ["message", "callback_query"] }, (timeoutS + 10) * 1000);
   }
 
-  sendMessage(chatId: number, text: string, buttons?: InlineButton[][]) {
-    return this.throttled(() => this.call<{ message_id: number }>("sendMessage", { chat_id: chatId, text: text.slice(0, 4000), disable_web_page_preview: true, ...(buttons?.length ? { reply_markup: { inline_keyboard: buttons } } : {}) }));
+  sendMessage(chatId: number, text: string, buttons?: InlineButton[][], options: { silent?: boolean } = {}) {
+    return this.throttled(() => this.call<{ message_id: number }>("sendMessage", { chat_id: chatId, text: text.slice(0, 4000), disable_web_page_preview: true, ...(options.silent ? { disable_notification: true } : {}), ...(buttons?.length ? { reply_markup: { inline_keyboard: buttons } } : {}) }));
   }
 
   editMessage(chatId: number, messageId: number, text: string, buttons?: InlineButton[][]) {

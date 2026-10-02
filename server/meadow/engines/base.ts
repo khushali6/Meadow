@@ -13,6 +13,14 @@ export type EngineEvent = {
   raw?: unknown;
 };
 
+/** Map an engine's error text to a reason the harness should stop on instead of retrying. */
+export function failureReason(text: string | undefined | null): "auth" | "model_unavailable" | null {
+  if (!text) return null;
+  if (/not logged in|please run \/login|log ?in required|please log ?in|logged out|unauthenticated|unauthori[sz]ed|invalid (x-)?api[ _-]?key|authentication (failed|error|required)|api key (is )?(missing|not set)/i.test(text)) return "auth";
+  if (/issue with the selected model|may not have access to it|model[^\n]{0,60}(not found|does not exist|not available|unavailable|not supported)|unknown model|no access to (the )?model/i.test(text)) return "model_unavailable";
+  return null;
+}
+
 export type RunRequest = {
   runId: string;
   prompt: string;

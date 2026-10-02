@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { capture, which } from "../core/exec";
-import type { DoctorReport, Engine, EngineEvent, RunRequest } from "./base";
+import { failureReason, type DoctorReport, type Engine, type EngineEvent, type RunRequest } from "./base";
 import { Supervisor } from "./supervisor";
 
 const REQUIRED_FLAGS = ["--print", "--output-format"] as const;
@@ -67,11 +67,12 @@ export function parseCursorLine(line: string): EngineEvent[] {
       const events: EngineEvent[] = [];
       if (usage) events.push({ type: "usage", title: "Token usage", usage: { tokensIn: usage.input_tokens ?? 0, tokensOut: usage.output_tokens ?? 0 } });
       const ok = data.subtype === "success" && !data.is_error;
-      events.push({ type: "done", title: ok ? "Cursor finished" : "Cursor reported an error", detail: typeof data.result === "string" ? data.result : undefined, ok, reason: ok ? "completed" : "engine_error", sessionId });
+      const result = typeof data.result === "string" ? data.result : undefined;
+      events.push({ type: "done", title: ok ? "Cursor finished" : "Cursor reported an error", detail: result, ok, reason: ok ? "completed" : failureReason(result) ?? "engine_error", sessionId });
       return events;
     }
     case "error":
-      return [{ type: "error", title: String((data as { message?: string }).message ?? "Cursor error"), reason: "engine_error" }];
+      return [{ type: "error", title: String((data as { message?: string }).message ?? "Cursor error"), reason: failureReason(String((data as { message?: string }).message ?? "")) ?? "engine_error" }];
     default:
       return [];
   }

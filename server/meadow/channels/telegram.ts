@@ -44,6 +44,7 @@ function consumePairingCode(text: string): boolean {
 export class TelegramChannel {
   api: TelegramApi | null = null;
   private running = false;
+  private generation = 0;
   private botName: string | null = null;
   lastError: string | null = null;
 
@@ -70,19 +71,21 @@ export class TelegramChannel {
     }
     this.running = true;
     console.log(`[meadow] Telegram bot @${this.botName} connected (long polling)`);
-    void this.poll();
+    void this.poll(++this.generation);
   }
 
   stop() {
     this.running = false;
+    this.generation += 1;
   }
 
-  private async poll() {
+  private async poll(generation: number) {
     let offset = Number(setting("telegram_offset") ?? 0);
-    while (this.running && this.api) {
+    while (this.running && this.api && generation === this.generation) {
       try {
         const updates = await this.api.getUpdates(offset);
         this.lastError = null;
+        if (generation !== this.generation) return;
         for (const update of updates) {
           offset = update.update_id + 1;
           setSetting("telegram_offset", String(offset));

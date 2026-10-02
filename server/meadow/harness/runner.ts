@@ -1,4 +1,4 @@
-import { loadConfig } from "../config";
+import { engineModel, getSecret, loadConfig } from "../config";
 import { requestApproval } from "../core/approvals";
 import { getDb, now } from "../core/db";
 import { bus, type EventType } from "../core/events";
@@ -283,7 +283,7 @@ export class Harness {
     let cost = 0;
     let sessionId: string | null = null;
     try {
-      const engineEnv = minimalEnv({ CURSOR_API_KEY: process.env.CURSOR_API_KEY, ANTHROPIC_API_KEY: config.engine.claudeUseFreeLlmApi ? undefined : process.env.ANTHROPIC_API_KEY });
+      const engineEnv = minimalEnv({ CURSOR_API_KEY: getSecret("CURSOR_API_KEY"), ANTHROPIC_API_KEY: config.engine.claudeUseFreeLlmApi ? undefined : getSecret("ANTHROPIC_API_KEY") });
       const stream = state.engine.run({
         runId: runKey,
         prompt,
@@ -292,7 +292,7 @@ export class Harness {
         timeoutS: config.engine.runTimeoutS,
         noOutputTimeoutS: config.engine.noOutputTimeoutS,
         env: engineEnv,
-        model: config.engine.model,
+        model: engineModel(state.engine.name),
         sessionId: kind === "fix" && state.engine.supportsResume ? previousSession : undefined,
       });
       for await (const event of stream) {
@@ -385,8 +385,10 @@ export class Harness {
             this.setPhase(row, { status: "stopped" });
             return "stopped";
           }
-          if (["missing_binary", "auth"].includes(result.reason)) {
-            return this.block(state, row, phase, phaseNumber, ordered.length, `${state.engine.label} is not ready (${result.reason === "auth" ? "not logged in" : "not installed"}). Run \`meadow doctor\` for the fix.`, null);
+          if (["missing_binary", "auth", "model_unavailable"].includes(result.reason)) {
+            const model = engineModel(state.engine.name);
+            const why = result.reason === "auth" ? "is not logged in" : result.reason === "missing_binary" ? "is not installed" : `can't use model ${model ? `"${model}"` : "(its default)"}; choose a model your account or gateway serves in Runtime settings`;
+            return this.block(state, row, phase, phaseNumber, ordered.length, `because ${state.engine.label} ${why} (run \`meadow doctor\`)`, null);
           }
           if (result.filesTouched === 0 && attemptsThisRun > 1) noChangeStreak += 1;
           else noChangeStreak = 0;

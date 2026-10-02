@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { getSecret, loadConfig } from "../config";
+import { engineModel, getSecret, loadConfig } from "../config";
 import { capture, which } from "../core/exec";
-import type { DoctorReport, Engine, EngineEvent, RunRequest } from "./base";
+import { minimalEnv } from "../core/exec";
+import { failureReason, type DoctorReport, type Engine, type EngineEvent, type RunRequest } from "./base";
 import { Supervisor } from "./supervisor";
 
 /** Parse one line of `claude -p --output-format stream-json --verbose`. */
@@ -37,10 +38,19 @@ export function parseClaudeLine(line: string): EngineEvent[] {
     const events: EngineEvent[] = [];
     if (usage) events.push({ type: "usage", title: "Token usage", usage: { tokensIn: (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0), tokensOut: usage.output_tokens ?? 0, costUsd: typeof data.total_cost_usd === "number" ? data.total_cost_usd : undefined } });
     const ok = data.subtype === "success" && !data.is_error;
-    events.push({ type: "done", title: ok ? "Claude Code finished" : `Claude Code ended: ${String(data.subtype)}`, detail: typeof data.result === "string" ? data.result : undefined, ok, reason: ok ? "completed" : "engine_error", sessionId });
+    const result = typeof data.result === "string" ? data.result : undefined;
+    events.push({ type: "done", title: ok ? "Claude Code finished" : `Claude Code ended: ${result?.split("\n")[0].slice(0, 160) || String(data.subtype)}`, detail: result, ok, reason: ok ? "completed" : failureReason(result) ?? "engine_error", sessionId });
     return events;
   }
   return [];
+}
+
+function isLoopback(url: string) {
+  try {
+    return ["localhost", "127.0.0.1", "[::1]", "::1"].includes(new URL(url).hostname);
+  } catch {
+    return false;
+  }
 }
 
 export class ClaudeCodeEngine implements Engine {
@@ -59,7 +69,7 @@ export class ClaudeCodeEngine implements Engine {
     const help = await capture(binary, ["--help"], { timeoutMs: 20_000 });
     const text = help.stdout + help.stderr;
     const flags: Record<string, boolean> = {};
-    for (const flag of ["--print", "--output-format", "--verbose", "--permission-mode", "--resume", "--model", "--dangerously-skip-permissions"]) flags[flag] = text.includes(flag);
+    for (const flag of ["--print", "--output-format", "--verbose", "--permission-mode", "--resume", "--model", "--dangerously-skip-permissions", "--strict-mcp-config"]) flags[flag] = text.includes(flag);
     flags.bypassPermissions = /bypassPermissions/.test(text);
     this.flags = flags;
     return flags;
@@ -67,6 +77,16 @@ export class ClaudeCodeEngine implements Engine {
 
   private viaGateway() {
     return loadConfig().engine.claudeUseFreeLlmApi;
+  }
+
+  /** Gateway variables for Claude Code. Only loopback gateways pass through, so prompts never leave the machine by accident. */
+  gatewayEnv(): Record<string, string> {
+    if (this.viaGateway()) return { ANTHROPIC_BASE_URL: loadConfig().llm.baseUrl.replace(/\/v1\/?$/, ""), ANTHROPIC_AUTH_TOKEN: getSecret("FREELLMAPI_API_KEY") ?? "" };
+    const base = process.env.ANTHROPIC_BASE_URL;
+    if (!base || !isLoopback(base)) return {};
+    const env: Record<string, string> = { ANTHROPIC_BASE_URL: base };
+    if (process.env.ANTHROPIC_AUTH_TOKEN) env.ANTHROPIC_AUTH_TOKEN = process.env.ANTHROPIC_AUTH_TOKEN;
+    return env;
   }
 
   async doctor(): Promise<DoctorReport> {
@@ -85,7 +105,19 @@ export class ClaudeCodeEngine implements Engine {
     if (this.viaGateway()) {
       report.checks.push(getSecret("FREELLMAPI_API_KEY") ? { name: "auth", ok: true, detail: "Routed through local FreeLLMAPI gateway" } : { name: "auth", ok: false, detail: "FREELLMAPI_API_KEY missing", fix: "Run `meadow init`." });
     } else {
-      report.checks.push({ name: "auth", ok: true, detail: "Uses your Claude Code login (checked on first run)" });
+      const gateway = this.gatewayEnv();
+      const env = minimalEnv({ ANTHROPIC_API_KEY: getSecret("ANTHROPIC_API_KEY"), ...gateway });
+      const status = await capture(binary, ["auth", "status"], { timeoutMs: 20_000, env });
+      let loggedIn: boolean | null = null;
+      try {
+        loggedIn = Boolean((JSON.parse(status.stdout) as { loggedIn?: boolean }).loggedIn);
+      } catch {
+        loggedIn = status.code === 0 ? !/not logged in/i.test(status.stdout + status.stderr) : null;
+      }
+      const via = gateway.ANTHROPIC_BASE_URL ? ` via local gateway ${gateway.ANTHROPIC_BASE_URL}` : "";
+      if (loggedIn === false) report.checks.push({ name: "auth", ok: false, detail: `Claude Code is not logged in${via}`, fix: "Run `claude` once and use /login, or put ANTHROPIC_API_KEY in ~/.meadow/secrets.env." });
+      else report.checks.push({ name: "auth", ok: true, detail: loggedIn ? `Logged in${via}` : `Login state unknown${via}; checked on first run` });
+      if (gateway.ANTHROPIC_BASE_URL && !engineModel("claude_code")) report.checks.push({ name: "model", ok: false, detail: "A local gateway is set but no model is chosen; Claude model names usually don't exist there.", fix: "Set the Claude Code model in Runtime settings (for example a model your gateway serves)." });
     }
     report.ready = report.checks.every(check => check.ok);
     return report;
@@ -108,17 +140,15 @@ export class ClaudeCodeEngine implements Engine {
     }
     const flags = await this.detectFlags(binary);
     const args = ["--print", "--output-format", "stream-json", "--verbose"];
+    // No --mcp-config: the engine gets no MCP servers, so the user's global browser/remote tools stay out of project runs.
+    if (flags["--strict-mcp-config"]) args.push("--strict-mcp-config");
     if (req.readonly) args.push("--permission-mode", "plan");
     else if (flags.bypassPermissions) args.push("--permission-mode", "bypassPermissions");
     else if (flags["--dangerously-skip-permissions"]) args.push("--dangerously-skip-permissions");
     if (req.model && flags["--model"]) args.push("--model", req.model);
     if (req.sessionId && flags["--resume"]) args.push("--resume", req.sessionId);
     args.push(req.prompt);
-    const env = { ...req.env };
-    if (this.viaGateway()) {
-      env.ANTHROPIC_BASE_URL = loadConfig().llm.baseUrl.replace(/\/v1\/?$/, "");
-      env.ANTHROPIC_AUTH_TOKEN = getSecret("FREELLMAPI_API_KEY") ?? "";
-    }
+    const env = { ...req.env, ...this.gatewayEnv() };
     yield* this.supervisor.start({ ...req, env }, binary, args, parseClaudeLine);
   }
 

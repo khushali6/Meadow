@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-export type EngineName = "cursor" | "claude_code" | "fake";
+export type EngineName = "cursor" | "claude_code" | "codex" | "gemini" | "custom" | "fake";
 export type NotificationLevel = "all" | "phases" | "failures";
 export type PhaseGate = "auto" | "ask";
 
@@ -10,7 +10,17 @@ export type MeadowConfig = {
   projectsDir: string;
   server: { host: string; port: number };
   llm: { baseUrl: string; model: string; embeddingModel: string; transcriptionModel: string; timeoutMs: number };
-  engine: { default: EngineName; model: string | null; runTimeoutS: number; noOutputTimeoutS: number; claudeUseFreeLlmApi: boolean };
+  engine: {
+    default: EngineName;
+    /** Fallback model when an engine has no entry in `models`. */
+    model: string | null;
+    models: Partial<Record<EngineName, string | null>>;
+    runTimeoutS: number;
+    noOutputTimeoutS: number;
+    claudeUseFreeLlmApi: boolean;
+    /** Shell command for the custom engine. Receives the prompt as $MEADOW_PROMPT and $MEADOW_PROMPT_FILE. */
+    custom: { label: string; command: string };
+  };
   harness: { maxAttempts: number; checkTimeoutS: number; massDeleteThreshold: number; phaseGate: PhaseGate };
   budget: { phaseTokens: number; dailyTokens: number; phaseWallClockS: number };
   telegram: { ownerId: number | null; notificationLevel: NotificationLevel; quietHours: { enabled: boolean; start: number; end: number }; voiceReplies: boolean };
@@ -22,10 +32,10 @@ export const DEFAULT_CONFIG: MeadowConfig = {
   projectsDir: path.join(os.homedir(), "meadow-projects"),
   server: { host: "127.0.0.1", port: 7777 },
   llm: { baseUrl: "http://127.0.0.1:3001/v1", model: "auto", embeddingModel: "auto", transcriptionModel: "auto", timeoutMs: 120_000 },
-  engine: { default: "cursor", model: null, runTimeoutS: 45 * 60, noOutputTimeoutS: 5 * 60, claudeUseFreeLlmApi: false },
+  engine: { default: "cursor", model: null, models: {}, runTimeoutS: 45 * 60, noOutputTimeoutS: 5 * 60, claudeUseFreeLlmApi: false, custom: { label: "Custom command", command: "" } },
   harness: { maxAttempts: 3, checkTimeoutS: 600, massDeleteThreshold: 20, phaseGate: "auto" },
   budget: { phaseTokens: 2_000_000, dailyTokens: 20_000_000, phaseWallClockS: 90 * 60 },
-  telegram: { ownerId: null, notificationLevel: "phases", quietHours: { enabled: false, start: 22, end: 8 }, voiceReplies: false },
+  telegram: { ownerId: null, notificationLevel: "all", quietHours: { enabled: false, start: 22, end: 8 }, voiceReplies: false },
   screenshots: { enabled: true },
   approvals: { expiryS: 30 * 60 },
 };
@@ -88,12 +98,18 @@ export function saveConfig(patch: unknown): MeadowConfig {
   return loadConfig();
 }
 
+export function engineModel(engine: string): string | null {
+  const config = loadConfig().engine;
+  const specific = config.models?.[engine as EngineName];
+  return specific === undefined ? config.model : specific || null;
+}
+
 export function resetConfigCache() {
   cached = null;
 }
 
 /** Secrets come only from the environment or ~/.meadow/secrets.env (0600), never from config.json. */
-export type SecretName = "FREELLMAPI_API_KEY" | "TELEGRAM_BOT_TOKEN" | "CURSOR_API_KEY" | "ANTHROPIC_API_KEY";
+export type SecretName = "FREELLMAPI_API_KEY" | "TELEGRAM_BOT_TOKEN" | "CURSOR_API_KEY" | "ANTHROPIC_API_KEY" | "OPENAI_API_KEY" | "GEMINI_API_KEY";
 
 function readSecretsFile(): Record<string, string> {
   try {

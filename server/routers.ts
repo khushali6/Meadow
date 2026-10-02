@@ -4,7 +4,7 @@ import { telegram, createPairingCode } from "./meadow/channels/telegram";
 import { getSecret, loadConfig, saveConfig, setSecret } from "./meadow/config";
 import { decide, listApprovals } from "./meadow/core/approvals";
 import { fullDoctor, llmStatus } from "./meadow/doctor";
-import { engineNames, ENGINE_LABELS } from "./meadow/engines/registry";
+import { engineLabel, engineNames } from "./meadow/engines/registry";
 import { harness } from "./meadow/harness/runner";
 import { handleAction, handleText } from "./meadow/intake/conversation";
 import { improvePlan } from "./meadow/intake/llm";
@@ -17,7 +17,7 @@ import { captureOnDemand } from "./meadow/visual/ondemand";
 const DASHBOARD = { channel: "dashboard", chat: "local" } as const;
 
 const configPatch = z.object({
-  engine: z.object({ default: z.enum(["cursor", "claude_code", "fake"]), model: z.string().nullable(), runTimeoutS: z.number().min(60).max(6 * 3600), noOutputTimeoutS: z.number().min(30).max(3600), claudeUseFreeLlmApi: z.boolean() }).partial().optional(),
+  engine: z.object({ default: z.enum(["cursor", "claude_code", "codex", "gemini", "custom", "fake"]), model: z.string().nullable(), models: z.record(z.string(), z.string().max(120).nullable()), runTimeoutS: z.number().min(60).max(6 * 3600), noOutputTimeoutS: z.number().min(30).max(3600), claudeUseFreeLlmApi: z.boolean() }).partial().optional(),
   harness: z.object({ maxAttempts: z.number().int().min(1).max(10), checkTimeoutS: z.number().min(10).max(7200), massDeleteThreshold: z.number().int().min(1), phaseGate: z.enum(["auto", "ask"]) }).partial().optional(),
   budget: z.object({ phaseTokens: z.number().int().min(1000), dailyTokens: z.number().int().min(1000), phaseWallClockS: z.number().int().min(60) }).partial().optional(),
   telegram: z.object({ notificationLevel: z.enum(["all", "phases", "failures"]), quietHours: z.object({ enabled: z.boolean(), start: z.number().int().min(0).max(23), end: z.number().int().min(0).max(23) }), voiceReplies: z.boolean() }).partial().optional(),
@@ -31,7 +31,7 @@ function safeSettings() {
   return {
     config,
     secrets: { freellmapi: Boolean(getSecret("FREELLMAPI_API_KEY")), telegram: Boolean(getSecret("TELEGRAM_BOT_TOKEN")) },
-    engines: engineNames().map(name => ({ name, label: ENGINE_LABELS[name as keyof typeof ENGINE_LABELS] ?? name })),
+    engines: engineNames().map(name => ({ name, label: engineLabel(name) })),
   };
 }
 

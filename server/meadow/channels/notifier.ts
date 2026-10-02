@@ -3,12 +3,11 @@ import { getDb } from "../core/db";
 import { bus, type MeadowEvent } from "../core/events";
 import { redact } from "../core/redact";
 import { getProject } from "../projects";
-import type { TelegramChannel } from "./telegram";
-import type { InlineButton } from "./telegramApi";
+import { engineLabel } from "../engines/registry";
+import { applyEvent, isFinal, renderProgress, startProgress, type PhaseProgress } from "./progress";
+import type { InlineButton, TelegramApi } from "./telegramApi";
 
-type Outgoing = { text: string; buttons?: InlineButton[][]; photos?: Array<{ path: string; caption: string }>; urgent: boolean };
-
-const URGENT = new Set(["phase_blocked", "approval_requested", "execution_finished"]);
+type Outgoing = { text: string; buttons?: InlineButton[][]; photos?: Array<{ path: string; caption: string }>; urgent: boolean; silent?: boolean };
 
 export function inQuietHours(date = new Date()): boolean {
   const quiet = loadConfig().telegram.quietHours;
@@ -17,14 +16,19 @@ export function inQuietHours(date = new Date()): boolean {
   return quiet.start > quiet.end ? hour >= quiet.start || hour < quiet.end : hour >= quiet.start && hour < quiet.end;
 }
 
+/** Event types that feed the live progress card. */
+const PROGRESS_TYPES = new Set(["phase_started", "session_started", "thinking", "message", "tool_call", "file_edit", "command_run", "check_result", "guard", "error", "screenshot", "phase_passed", "phase_blocked", "control", "execution_finished"]);
+
 export function wantsEvent(event: MeadowEvent): boolean {
   const level = loadConfig().telegram.notificationLevel;
   if (["approval_requested", "phase_blocked"].includes(event.type)) return true;
   if (event.type === "execution_finished") return level !== "failures" || event.payload?.status !== "completed";
-  if (level === "failures") return event.type === "error" && Boolean(event.executionId);
-  if (level === "phases") return ["phase_passed", "plan_ready"].includes(event.type);
+  if (level === "failures") return event.type === "error" && Boolean(event.executionId) && event.runId === null;
+  if (level === "phases") return ["phase_started", "phase_passed", "plan_ready", "execution_started"].includes(event.type) || (event.type === "control" && ["paused", "waiting"].includes(String(event.payload?.status)));
   return true;
 }
+
+const isFixNotice = (event: MeadowEvent) => event.type === "message" && event.runId === null && /fix attempt/i.test(event.title);
 
 /** Formats events into Telegram cards. Streams of small events collapse into one live-status message edited in place. */
 export function formatEvent(event: MeadowEvent): Outgoing | null {
@@ -67,6 +71,21 @@ export function formatEvent(event: MeadowEvent): Outgoing | null {
     }
     case "plan_ready":
       return { text: `${event.title} (${event.detail}).`, urgent: false };
+    case "execution_started":
+      return { text: `🚀 ${event.title}${pid ? ` for ${safeName(pid)}` : ""}\n${event.detail}\n\nI'll post a live progress card for each phase and message you when checks pass, fail or need a decision.`, urgent: false, buttons: [[{ text: "Pause", callback_data: `pause:${pid}` }, { text: "Stop", callback_data: `stop:${pid}` }]] };
+    case "phase_started":
+      return loadConfig().telegram.notificationLevel === "phases" ? { text: `▶️ ${event.title}`, urgent: false, silent: true } : null;
+    case "message":
+      return isFixNotice(event) ? { text: `🔁 ${event.title}\n${event.detail}`, urgent: false, silent: true } : null;
+    case "guard":
+      return { text: `🛡 ${event.title}\n${event.detail.slice(0, 800)}`, urgent: false, silent: true };
+    case "control": {
+      const status = p.status as string | undefined;
+      if (status === "paused" || status === "waiting") return { text: `⏸ ${event.title}${event.detail ? `\n${event.detail}` : ""}`, urgent: false, buttons: [[{ text: "Resume", callback_data: `resume:${pid}` }, { text: "Stop", callback_data: `stop:${pid}` }]] };
+      return null;
+    }
+    case "error":
+      return event.runId === null && event.executionId ? { text: `⚠️ ${event.title}\n${event.detail.slice(0, 800)}`, urgent: false, silent: true } : null;
     default:
       return null;
   }
@@ -80,69 +99,115 @@ function safeName(projectId: number) {
   }
 }
 
+type Target = { ownerChat(): number | null; api: Pick<TelegramApi, "sendMessage" | "editMessage" | "sendPhotos"> | null };
+
+type LiveCard = { progress: PhaseProgress; messageId: number; chain: Promise<void>; timer: NodeJS.Timeout | null; lastText: string; lastEdit: number };
+
+const RENDER_DEBOUNCE_MS = 2500;
+const HEARTBEAT_MS = 30_000;
+
 export class Notifier {
   private queue: Outgoing[] = [];
-  private live = new Map<number, { messageId: number; lines: string[]; timer: NodeJS.Timeout | null }>();
+  private cards = new Map<number, LiveCard>();
   private unsubscribe: (() => void) | null = null;
   private quietTimer: NodeJS.Timeout | null = null;
+  private heartbeat: NodeJS.Timeout | null = null;
 
-  constructor(private channel: TelegramChannel) {}
+  constructor(private channel: Target) {}
 
   start() {
     this.unsubscribe = bus.onEvent(event => {
-      if (!wantsEvent(event)) return;
       void this.dispatch(event).catch(error => console.warn("[meadow] notify failed", redact((error as Error).message)));
     });
     this.quietTimer = setInterval(() => void this.flushQuiet(), 60_000);
+    this.heartbeat = setInterval(() => this.beat(), HEARTBEAT_MS);
   }
 
   stop() {
     this.unsubscribe?.();
     if (this.quietTimer) clearInterval(this.quietTimer);
+    if (this.heartbeat) clearInterval(this.heartbeat);
+    for (const card of this.cards.values()) if (card.timer) clearTimeout(card.timer);
+    this.cards.clear();
   }
 
-  private async dispatch(event: MeadowEvent) {
+  /** Resolves once every queued card render has been sent (used by tests and shutdown). */
+  async idle() {
+    await Promise.all(Array.from(this.cards.values()).map(card => card.chain));
+  }
+
+  async dispatch(event: MeadowEvent) {
     const chat = this.channel.ownerChat();
     if (!chat || !this.channel.api) return;
+    if (loadConfig().telegram.notificationLevel === "all" && PROGRESS_TYPES.has(event.type)) this.track(chat, event);
+    if (!wantsEvent(event)) return;
     const card = formatEvent(event);
-    if (card) {
-      if (!card.urgent && inQuietHours()) {
-        this.queue.push(card);
-        return;
-      }
-      await this.deliver(chat, card);
-      if (event.type === "phase_passed" || event.type === "execution_finished") this.live.delete(event.projectId ?? 0);
+    if (!card) return;
+    if (!card.urgent && inQuietHours()) {
+      this.queue.push(card);
       return;
     }
-    if (loadConfig().telegram.notificationLevel === "all" && !inQuietHours()) this.batchLive(chat, event);
+    await this.deliver(chat, card);
   }
 
   private async deliver(chat: number, card: Outgoing) {
     const api = this.channel.api!;
-    await api.sendMessage(chat, redact(card.text), card.buttons);
+    await api.sendMessage(chat, redact(card.text), card.buttons, { silent: card.silent });
     if (card.photos?.length) await api.sendPhotos(chat, card.photos).catch(error => console.warn("[meadow] photo send failed", (error as Error).message));
   }
 
-  /** Collapse bursts into a single message per project, edited at most every few seconds. */
-  private batchLive(chat: number, event: MeadowEvent) {
+  /** One progress card per running phase, created on phase start and edited in place as events arrive. */
+  private track(chat: number, event: MeadowEvent) {
     const key = event.projectId ?? 0;
-    const entry = this.live.get(key) ?? { messageId: 0, lines: [], timer: null };
-    entry.lines.push(`${event.ts.slice(11, 19)} ${event.title}`);
-    entry.lines = entry.lines.slice(-12);
-    this.live.set(key, entry);
-    if (entry.timer) return;
-    entry.timer = setTimeout(async () => {
-      entry.timer = null;
+    if (event.type === "phase_started") {
+      const previous = this.cards.get(key);
+      if (previous?.timer) clearTimeout(previous.timer);
+      const card: LiveCard = { progress: startProgress(event, { projectName: safeName(key), engine: engineFor(event.executionId), maxAttempts: loadConfig().harness.maxAttempts }), messageId: 0, chain: Promise.resolve(), timer: null, lastText: "", lastEdit: 0 };
+      this.cards.set(key, card);
+      if (!inQuietHours()) this.render(chat, card);
+      return;
+    }
+    const card = this.cards.get(key);
+    if (!card || !applyEvent(card.progress, event)) return;
+    if (inQuietHours()) return;
+    if (isFinal(card.progress.stage)) {
+      if (card.timer) clearTimeout(card.timer);
+      card.timer = null;
+      this.render(chat, card);
+      this.cards.delete(key);
+      return;
+    }
+    if (!card.timer) card.timer = setTimeout(() => {
+      card.timer = null;
+      this.render(chat, card);
+    }, RENDER_DEBOUNCE_MS);
+  }
+
+  private render(chat: number, card: LiveCard) {
+    card.chain = card.chain.then(async () => {
       const api = this.channel.api;
       if (!api) return;
-      const text = redact(`Live status${key ? ` · ${safeName(key)}` : ""}\n${entry.lines.join("\n")}`);
+      const text = redact(renderProgress(card.progress));
+      if (text === card.lastText) return;
       try {
-        if (entry.messageId) await api.editMessage(chat, entry.messageId, text);
-        else entry.messageId = (await api.sendMessage(chat, text)).message_id;
-      } catch {
-        entry.messageId = 0;
+        if (card.messageId) await api.editMessage(chat, card.messageId, text);
+        else card.messageId = (await api.sendMessage(chat, text, undefined, { silent: card.progress.stage !== "starting" })).message_id;
+        card.lastText = text;
+        card.lastEdit = Date.now();
+      } catch (error) {
+        console.warn("[meadow] progress card update failed", redact((error as Error).message));
+        card.messageId = 0;
       }
-    }, 3000);
+    });
+  }
+
+  /** Keep elapsed time fresh while an engine step runs silently for a long time. */
+  private beat() {
+    const chat = this.channel.ownerChat();
+    if (!chat || inQuietHours()) return;
+    for (const card of this.cards.values()) {
+      if (!isFinal(card.progress.stage) && !card.timer && Date.now() - card.lastEdit >= HEARTBEAT_MS - 1000) this.render(chat, card);
+    }
   }
 
   private async flushQuiet() {
@@ -152,4 +217,10 @@ export class Notifier {
     const pending = this.queue.splice(0);
     for (const card of pending) await this.deliver(chat, card).catch(() => undefined);
   }
+}
+
+function engineFor(executionId: number | null) {
+  if (!executionId) return "engine";
+  const row = getDb().get<{ engine: string }>("SELECT engine FROM executions WHERE id = ?", executionId);
+  return row ? engineLabel(row.engine) : "engine";
 }
