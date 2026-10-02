@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { getSecret, loadConfig, saveConfig } from "../config";
 import { getDb } from "../core/db";
 import { redact, registerSecret } from "../core/redact";
+import { chatInvestigate } from "../atlas/chat";
 import { handleAction, handleText, type Reply } from "../intake/conversation";
 import { statusText } from "../service";
 import { captureOnDemand } from "../visual/ondemand";
@@ -161,8 +162,9 @@ export class TelegramChannel {
   async send(chatId: number, reply: Reply) {
     const api = this.api;
     if (!api) return;
-    const buttons: InlineButton[][] | undefined = reply.buttons?.map(row => row.map(button => ({ text: button.label, callback_data: button.action.slice(0, 64) })));
-    await api.sendMessage(chatId, redact(reply.text), buttons);
+    const toInline = (rows: Reply["buttons"]): InlineButton[][] | undefined => rows?.map(row => row.map(button => ({ text: button.label, callback_data: button.action.slice(0, 64) })));
+    const sent = await api.sendMessage(chatId, redact(reply.text), toInline(reply.buttons));
+    if (reply.investigate) await this.liveInvestigation(chatId, sent.message_id, reply.investigate, toInline);
     if (reply.shot) {
       try {
         const { shots, skipped } = await captureOnDemand(reply.shot.projectId, reply.shot.route);
@@ -171,6 +173,38 @@ export class TelegramChannel {
       } catch (error) {
         await api.sendMessage(chatId, `Screenshot failed: ${redact((error as Error).message)}`);
       }
+    }
+  }
+
+  /** Edits one message in place with the agent trace, then posts the cited answer with action buttons. */
+  private async liveInvestigation(chatId: number, messageId: number, job: { projectId: number; question: string }, toInline: (rows: Reply["buttons"]) => InlineButton[][] | undefined) {
+    const api = this.api!;
+    let pending: string | null = null;
+    let lastEdit = 0;
+    let timer: NodeJS.Timeout | null = null;
+    let chain: Promise<unknown> = Promise.resolve();
+    const flush = () => {
+      timer = null;
+      if (pending === null) return;
+      const text = redact(pending);
+      pending = null;
+      lastEdit = Date.now();
+      chain = chain.then(() => api.editMessage(chatId, messageId, text)).catch(() => null);
+    };
+    const onProgress = (card: string) => {
+      pending = card;
+      if (!timer) timer = setTimeout(flush, Math.max(0, 2000 - (Date.now() - lastEdit)));
+    };
+    try {
+      const answer = await chatInvestigate(job.projectId, job.question, "telegram", onProgress);
+      if (timer) clearTimeout(timer);
+      pending = null;
+      await chain;
+      await api.editMessage(chatId, messageId, `🔍 Investigation finished: ${job.question.slice(0, 200)}`).catch(() => null);
+      await api.sendMessage(chatId, answer.text, toInline(answer.buttons));
+    } catch (error) {
+      if (timer) clearTimeout(timer);
+      await api.sendMessage(chatId, `Investigation failed: ${redact((error as Error).message)}`);
     }
   }
 

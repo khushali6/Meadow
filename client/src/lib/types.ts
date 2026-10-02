@@ -13,3 +13,5 @@ export type Event = ProjectDetail["events"][number];
 export type Settings = Out["settings"];
 export type Doctor = Out["doctor"];
 export type ChatReply = Out["chat"];
+export type AtlasInvestigation = NonNullable<Out["atlas"]["investigation"]>;
+export type AtlasMap = Out["atlas"]["map"];

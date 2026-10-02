@@ -1,11 +1,11 @@
 import { Toaster } from "@/components/ui/sonner";
-import { Activity, BookOpen, Boxes, ChevronDown, FileText, FolderGit2, KeyRound, Leaf, Menu, MessageSquarePlus, Moon, Settings2, ShieldCheck, Sun } from "lucide-react";
+import { Activity, BookOpen, Boxes, Network, Radar, ChevronDown, FileText, FolderGit2, KeyRound, Leaf, Menu, MessageSquarePlus, Moon, Settings2, ShieldCheck, Sun } from "lucide-react";
 import { useGSAP } from "@gsap/react";
 import { gsap } from "gsap";
 import { MotionConfig } from "motion/react";
 import { motion, MotionButton } from "./components/animation/motion";
 import { ActivityDot } from "./components/animation/technical";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useLocation } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -14,6 +14,7 @@ import { ThemeProvider, useTheme } from "./contexts/ThemeContext";
 import { saveToken, useLiveEvents, useUnauthorized, type LiveEvent } from "./lib/api";
 import { trpc } from "./lib/trpc";
 import { ApprovalsView } from "./views/ApprovalsView";
+import { InvestigateView } from "./views/InvestigateView";
 import { MemoryView } from "./views/MemoryView";
 import { PlanView } from "./views/PlanView";
 import { ProjectsView } from "./views/ProjectsView";
@@ -24,6 +25,8 @@ import { SettingsView } from "./views/SettingsView";
 gsap.registerPlugin(useGSAP);
 gsap.defaults({ ease: "power3.out", duration: 0.55 });
 
+const SystemMapView = lazy(() => import("./views/SystemMapView").then(module => ({ default: module.SystemMapView })));
+
 const NAV = [
   { key: "/", label: "Live console", icon: Activity },
   { key: "/request", label: "New request", icon: MessageSquarePlus },
@@ -31,6 +34,8 @@ const NAV = [
   { key: "/plans", label: "Execution plan", icon: FileText },
   { key: "/approvals", label: "Policy gates", icon: ShieldCheck, badge: true },
   { key: "/memory", label: "Context index", icon: BookOpen },
+  { key: "/atlas", label: "CodeAtlas", icon: Radar },
+  { key: "/map", label: "System map", icon: Network },
 ] as const;
 
 const PROJECT_KEY = "meadow-project";
@@ -97,7 +102,20 @@ function Dashboard() {
   }, [projectId]);
 
   const onEvent = useCallback((event: LiveEvent) => {
+    if (event.type === "atlas_trace") {
+      utils.atlas.investigation.invalidate();
+      return;
+    }
+    if (event.type === "atlas_ingest") {
+      utils.atlas.status.invalidate();
+      if (event.payload?.step === "done") {
+        utils.atlas.map.invalidate();
+        toast.success(event.title, { description: event.detail });
+      }
+      return;
+    }
     utils.project.invalidate();
+    if (event.type === "approval_decided") utils.atlas.actions.invalidate();
     if (["approval_requested", "approval_decided", "execution_started", "execution_finished", "phase_passed", "phase_blocked", "plan_ready", "control"].includes(event.type)) utils.overview.invalidate();
     if (TOASTED.has(event.type) && Date.now() - new Date(event.ts).getTime() < 20_000) {
       const show = event.type === "phase_blocked" ? toast.error : event.type === "approval_requested" ? toast.warning : toast.success;
@@ -185,7 +203,7 @@ function Dashboard() {
       <main className="main-canvas">
         <header className="topbar">
           <button className="mobile-menu icon-button" onClick={() => setMobileNav(true)} aria-label="Open navigation"><Menu size={19} /></button>
-          <div className="breadcrumb"><span>Meadow</span><span className="crumb-separator">/</span>{project && (location === "/" || location === "/plans" || location === "/memory") ? <><span>{project.name}</span><span className="crumb-separator">/</span></> : null}<strong>{current.label}</strong></div>
+          <div className="breadcrumb"><span>Meadow</span><span className="crumb-separator">/</span>{project && (location === "/" || location === "/plans" || location === "/memory" || location === "/atlas" || location === "/map") ? <><span>{project.name}</span><span className="crumb-separator">/</span></> : null}<strong>{current.label}</strong></div>
           <div className="topbar-actions">
             <div className={`status-inline ${connected ? "" : "offline"}`}><ActivityDot active={connected && anyRunning} tone={connected ? "idle" : "error"} /><span>{connected ? (anyRunning ? "EXECUTING · 127.0.0.1" : "CONNECTED · 127.0.0.1") : "RECONNECTING…"}</span></div>
             <button className="icon-button" onClick={() => toggleTheme?.()} aria-label="Toggle theme">{theme === "light" ? <Moon size={17} /> : <Sun size={17} />}</button>
@@ -201,8 +219,10 @@ function Dashboard() {
           {location === "/projects" ? <ProjectsView projects={projects} settings={settings.data} activeId={project?.id ?? null} onOpen={openProject} /> : null}
           {location === "/approvals" ? <ApprovalsView approvals={overview.data?.approvals ?? []} projects={projects} /> : null}
           {location === "/memory" ? <MemoryView key={project?.id ?? 0} project={project} /> : null}
+          {location === "/atlas" ? <InvestigateView key={project?.id ?? 0} project={project} onNavigate={go} /> : null}
+          {location === "/map" ? <Suspense fallback={<div className="event-empty">Loading the system map…</div>}><SystemMapView key={project?.id ?? 0} project={project} onNavigate={go} /></Suspense> : null}
           {location === "/settings" ? <SettingsView settings={settings.data} overview={overview.data} project={project} /> : null}
-          {!["/", "/plans", "/request", "/projects", "/approvals", "/memory", "/settings"].includes(location) ? <EmptyState icon={Leaf} title="Page not found" body="That page doesn't exist." action={<MotionButton className="button primary" onClick={() => go("/")}>Back to the live console</MotionButton>} /> : null}
+          {!["/", "/plans", "/request", "/projects", "/approvals", "/memory", "/atlas", "/map", "/settings"].includes(location) ? <EmptyState icon={Leaf} title="Page not found" body="That page doesn't exist." action={<MotionButton className="button primary" onClick={() => go("/")}>Back to the live console</MotionButton>} /> : null}
         </div>
       </main>
     </div>

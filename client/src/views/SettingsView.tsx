@@ -31,10 +31,10 @@ function NumberInput({ value, onCommit, min, step = 1, suffix }: { value: number
   );
 }
 
-function SecretField({ name, present, label, placeholder }: { name: "FREELLMAPI_API_KEY" | "TELEGRAM_BOT_TOKEN"; present: boolean; label: string; placeholder: string }) {
+function SecretField({ name, present, label, placeholder }: { name: "FREELLMAPI_API_KEY" | "TELEGRAM_BOT_TOKEN" | "GITHUB_TOKEN" | "JIRA_API_TOKEN" | "LINEAR_API_KEY"; present: boolean; label: string; placeholder: string }) {
   const utils = trpc.useUtils();
   const [value, setValue] = useState("");
-  const save = trpc.setSecret.useMutation({ onSuccess: () => { setValue(""); utils.settings.invalidate(); utils.llmStatus.invalidate(); utils.overview.invalidate(); utils.doctor.invalidate(); } });
+  const save = trpc.setSecret.useMutation({ onSuccess: () => { setValue(""); utils.settings.invalidate(); utils.llmStatus.invalidate(); utils.overview.invalidate(); utils.doctor.invalidate(); utils.atlas.status.invalidate(); } });
   return (
     <div className="secret-field">
       <Row label={label} hint={present ? "Stored in ~/.meadow/secrets.env (owner-only file). Never shown again." : "Not set"}>
@@ -132,6 +132,35 @@ export function SettingsView({ settings, overview, project }: { settings: Settin
           <NumberInput value={config.telegram.quietHours.end} min={0} suffix=":00" onCommit={value => patch({ telegram: { quietHours: { ...config.telegram.quietHours, end: Math.min(23, Math.max(0, Math.round(value))) } } })} />
         </Row>
         <Row label="Voice replies" hint="Needs piper and ffmpeg installed."><Toggle checked={config.telegram.voiceReplies} onChange={value => patch({ telegram: { voiceReplies: value } })} label="Voice replies" /></Row>
+      </Section>
+
+      <Section title="CodeAtlas" description="Knowledge graph and investigations. Code, git history, docs and incidents are indexed locally. Issue trackers are contacted only when you switch them on and save a token.">
+        <Row label="LLM rerank" hint="Ask FreeLLMAPI to rerank retrieved evidence. Falls back to fused scores when the gateway is down."><Toggle checked={config.atlas.rerank} onChange={value => patch({ atlas: { rerank: value } })} label="LLM rerank" /></Row>
+        <Row label="Agent tool steps" hint="Maximum tool calls the operator agent may make per question."><NumberInput value={config.atlas.maxAgentSteps} min={1} onCommit={value => patch({ atlas: { maxAgentSteps: Math.min(20, Math.max(1, Math.round(value))) } })} /></Row>
+        <Row label="GitHub issues and PRs" hint="Repo defaults to the git origin remote."><Toggle checked={config.atlas.connectors.github.enabled} onChange={value => patch({ atlas: { connectors: { github: { enabled: value } } } })} label="GitHub connector" /></Row>
+        {config.atlas.connectors.github.enabled ? (
+          <>
+            <Row label="Repository" hint="owner/name"><input className="text-input" placeholder="from origin remote" defaultValue={config.atlas.connectors.github.repo ?? ""} onBlur={event => patch({ atlas: { connectors: { github: { repo: event.target.value.trim() || null } } } })} /></Row>
+            <SecretField name="GITHUB_TOKEN" present={secrets.github} label="GitHub token" placeholder="Fine-grained token with read access to issues and PRs" />
+          </>
+        ) : null}
+        <Row label="Jira"><Toggle checked={config.atlas.connectors.jira.enabled} onChange={value => patch({ atlas: { connectors: { jira: { enabled: value } } } })} label="Jira connector" /></Row>
+        {config.atlas.connectors.jira.enabled ? (
+          <>
+            <Row label="Site URL" hint="https://your-team.atlassian.net"><input className="text-input" defaultValue={config.atlas.connectors.jira.baseUrl ?? ""} onBlur={event => patch({ atlas: { connectors: { jira: { baseUrl: event.target.value.trim() || null } } } })} /></Row>
+            <Row label="Account email"><input className="text-input" defaultValue={config.atlas.connectors.jira.email ?? ""} onBlur={event => patch({ atlas: { connectors: { jira: { email: event.target.value.trim() || null } } } })} /></Row>
+            <Row label="JQL"><input className="text-input" defaultValue={config.atlas.connectors.jira.jql} onBlur={event => event.target.value.trim() && patch({ atlas: { connectors: { jira: { jql: event.target.value.trim() } } } })} /></Row>
+            <SecretField name="JIRA_API_TOKEN" present={secrets.jira} label="Jira API token" placeholder="From id.atlassian.com → Security → API tokens" />
+          </>
+        ) : null}
+        <Row label="Linear"><Toggle checked={config.atlas.connectors.linear.enabled} onChange={value => patch({ atlas: { connectors: { linear: { enabled: value } } } })} label="Linear connector" /></Row>
+        {config.atlas.connectors.linear.enabled ? (
+          <>
+            <Row label="Team key" hint="Optional, e.g. ENG"><input className="text-input" defaultValue={config.atlas.connectors.linear.teamKey ?? ""} onBlur={event => patch({ atlas: { connectors: { linear: { teamKey: event.target.value.trim() || null } } } })} /></Row>
+            <SecretField name="LINEAR_API_KEY" present={secrets.linear} label="Linear API key" placeholder="lin_api_…" />
+          </>
+        ) : null}
+        <Row label="External MCP servers" hint="Add entries to atlas.mcpServers in ~/.meadow/config.json. Their tools are offered to the operator agent."><code className="inline-code">{config.atlas.mcpServers.length ? config.atlas.mcpServers.map(server => server.name).join(", ") : "none"}</code></Row>
       </Section>
 
       <Section title="Screenshots" description="Captured only from the project's own localhost preview, desktop and mobile, after checks pass.">

@@ -64,8 +64,14 @@ MEADOW_ENGINE=fake meadow run examples/DEMO-PLAN.md
 | `meadow status [project]` | Shows progress |
 | `meadow pair` | Prints a new Telegram pairing code |
 | `meadow export-run <project> [--out file]` | Exports plans, phases, runs, checks and events as JSON |
+| `meadow atlas demo` | Generates the AcmePay demo repo (six services, releases, a planted incident) and indexes it |
+| `meadow atlas ingest <project>` | Builds or refreshes the CodeAtlas knowledge graph |
+| `meadow atlas ask <project> "<question>" [--mode agentic\|hybrid\|graph\|vector]` | Runs an investigation and streams the agent trace |
+| `meadow atlas eval <project> [--json file]` | Benchmarks the retrieval modes against `.atlas/eval.json` |
+| `meadow atlas tools` / `meadow atlas mcp-config` | Lists the tools / prints the MCP config for Cursor and Claude Code |
+| `meadow mcp [--project P]` | Runs the CodeAtlas MCP server over stdio |
 
-In Telegram (and in the dashboard's Request page) you can also use `/new`, `/projects`, `/project`, `/plan`, `/status`, `/phase`, `/pause`, `/resume`, `/stop`, `/retry`, `/skip`, `/rollback`, `/logs`, `/engine`, `/ask`, `/remember`, `/index`, `/notify`, `/budget`, `/shot` and `/help`.
+In Telegram (and in the dashboard's Request page) you can also use `/new`, `/projects`, `/project`, `/plan`, `/status`, `/phase`, `/pause`, `/resume`, `/stop`, `/retry`, `/skip`, `/rollback`, `/logs`, `/engine`, `/ask`, `/remember`, `/index`, `/notify`, `/budget`, `/shot`, `/investigate` (also `/why`) and `/help`.
 
 ## Progress on Telegram
 
@@ -77,6 +83,41 @@ Pair a bot (`meadow init` or Settings → Telegram) and Meadow reports every run
 - **Phase passed** cards with checks, diff stats, new dependencies and screenshots; **blocked** cards with Retry with hint / Retry / Skip / Roll back / Stop; **approvals** that default to Deny; **run finished**.
 
 Notification levels: *Everything* (default, includes the live card), *Phase starts and results*, or *Only problems*. Quiet hours hold non-urgent messages until the window ends; blocked phases and approvals always come through.
+
+## CodeAtlas: ask your system
+
+CodeAtlas is Meadow's engineering-intelligence layer. It builds a **temporal knowledge graph** of each project and answers questions like *"Why did payment-service start timing out after v2.4.0?"* with cited, verified evidence. It can then hand the fix to the Meadow harness.
+
+**What gets indexed (locally):** services (from package/go/python markers or `services/`, `apps/` and similar folders), files, functions and classes, imports and calls, HTTP routes and OpenAPI specs, SQL/Prisma tables with reads and writes, service-to-service calls (URLs, env vars, compose `depends_on`), Terraform resources, CI deploy pipelines, dependencies, CODEOWNERS teams, Markdown docs and ADRs, incident and postmortem files, and git history: commits, authors, PRs parsed from merge messages, and tags as releases. Nodes and edges carry `valid_from`/`valid_to`, so "what changed between v2.3.0 and v2.4.0" is a graph query. GitHub issues/PRs, Jira and Linear are optional connectors, off until you enable them and save a token.
+
+**How a question is answered:**
+
+1. **Supervisor**: classifies the query (semantic, entity, exact, relationship, code, temporal, multi-hop), then plans sub-questions and tool calls. It uses FreeLLMAPI when available and rules otherwise.
+2. **Researcher**: hybrid retrieval. Vector, BM25 (SQLite FTS5), symbol and graph retrievers are fused with reciprocal rank fusion using per-query-type weights. Results get release windows, parent context (function → file → service), snippet compression and optional LLM reranking.
+3. **Architect**: graph paths between entities and, for incidents, a ranking of suspect PRs and commits scored against their actual diffs.
+4. **Operator**: calls internal tools and any external MCP tools you configure.
+5. **Writer**: an answer where every sentence cites evidence `[n]`.
+6. **Verifier**: checks each claim against its sources, re-retrieves once for unsupported claims, and marks the rest *unverified*.
+
+**Where you use it:**
+
+- **Dashboard → CodeAtlas**: ask questions and watch the live agent trace, the answer with citations, verifier scores, ranked suspects, graph evidence and sources.
+- **Dashboard → System map**: architecture, API, history and code layers. Click nodes, find the path between any two, or overlay an investigation's evidence path.
+- **Telegram**: `/investigate <question>` edits one live card as the agents work, then sends the answer with **Fix with Meadow** and **Create issue** buttons.
+- **Cursor, Claude Code and other MCP clients**: `meadow atlas mcp-config` prints the snippet. The server runs locally over stdio and exposes `search_code`, `get_repository_map`, `find_dependencies`, `trace_service`, `find_related_incidents`, `get_recent_deployments`, `get_pull_request`, `get_issue`, `query_architecture`, `get_owner`, `investigate`, `run_tests`, `create_issue` and `propose_patch`.
+
+**Write tools are gated.** `run_tests`, `create_issue` and `propose_patch` only create a pending action and an approval request. Nothing runs until you approve it in the dashboard or on Telegram, and unanswered approvals expire as denied. Approved actions run inside the Meadow daemon, even when an MCP client requested them. `propose_patch` turns the root cause into a one-phase plan with your project's test command as its check (or, if there isn't one, a check that the suspect files actually changed) and runs it through the normal harness, with the same guards, branches and progress reporting.
+
+**Benchmark.** `meadow atlas eval` scores each retrieval mode against `.atlas/eval.json` (questions plus the graph node keys that answer them). On the bundled AcmePay demo (12 questions, LLM off, local hashed vectors):
+
+| Mode | Recall@5 | Recall@10 | MRR | nDCG@10 | Answer hit | Faithfulness | Latency avg / p95 |
+|---|---|---|---|---|---|---|---|
+| vector | 0.48 | 0.65 | 0.48 | 0.45 | 0.64 | 0.98 | 3 / 13 ms |
+| graph | 0.77 | 0.90 | 0.74 | 0.76 | 0.89 | 1.00 | 2 / 4 ms |
+| hybrid | 0.90 | 0.98 | 0.78 | 0.80 | 0.97 | 1.00 | 2 / 5 ms |
+| agentic | 0.90 | 0.96 | 0.78 | 0.80 | 1.00 | 1.00 | 8 / 58 ms |
+
+These numbers come from a small synthetic repo that the same code generates, so treat them as a regression baseline rather than a general claim. Add your own `.atlas/eval.json` to measure your codebase.
 
 ## Plan format
 
@@ -129,6 +170,10 @@ Settings live in `~/.meadow/config.json` and are editable from the dashboard's S
 
 Each engine can have its own model (Settings → Coding engine, or `engine.models` in `config.json`). If an engine reports that it isn't logged in or can't use the chosen model, the phase stops at once with the fix instead of retrying.
 | `MEADOW_PIPER_MODEL` | Piper voice model for spoken replies |
+| `GITHUB_TOKEN` / `JIRA_API_TOKEN` / `LINEAR_API_KEY` | CodeAtlas connectors, used only when enabled in Settings → CodeAtlas |
+| `MEADOW_ATLAS_NO_LLM=1` | Force CodeAtlas to its rule-based planner and writer |
+
+External MCP servers for the CodeAtlas operator go in `atlas.mcpServers` in `config.json` (`{ "name", "command", "args", "secrets": ["NAME"] }`). They are spawned with a minimal environment plus only the secrets you list.
 
 Prompt templates can be overridden by placing files in `<project>/.meadow/templates/` or `~/.meadow/templates/`.
 
@@ -140,11 +185,14 @@ Prompt templates can be overridden by placing files in `<project>/.meadow/templa
 - Engines run with a minimal environment allowlist and are killed as a whole process group on timeout, silence, or stop. Claude Code runs with `--strict-mcp-config`, so your global MCP servers (browsers, remote tools) are not available inside project runs.
 - Guards revert edits to `PLAN.md`, `SPEC.md` and `.meadow/`, revert symlinks that escape the project, block commits that add secrets or credential files, and pause for approval before mass deletions. Approvals that aren't answered in time are denied.
 - Screenshots only capture the project's own localhost preview, and pages showing secrets are skipped.
-- `.env` files, keys and credentials are never indexed for search.
+- `.env` files, keys and credentials are never indexed for search, by the context index or by CodeAtlas. Files that look like they contain a secret are skipped, and every trace, answer and tool result is redacted.
+- CodeAtlas write tools (tests, issues, patches) only queue approvals. The MCP server cannot execute them itself; the daemon runs them after you approve.
 
 See [SECURITY.md](SECURITY.md) for the full model and how to report issues.
 
 ## Honest limits
+
+- CodeAtlas parsing is regex-based, not a full compiler front end. It handles the common TypeScript/JavaScript, Python, Go, SQL, Terraform and OpenAPI shapes, but dynamic dispatch, generated code and unusual layouts are missed or approximated. Without FreeLLMAPI, answers come from templates, which are accurate but terse.
 
 - Meadow verifies what the checks measure. A weak check (only `file_exists`) proves little; the validator warns about it.
 - Engines are external tools. Meadow can't make them smarter, only keep them on task and catch their failures. Small local models (around 14B parameters) behind a gateway usually can't drive an agentic CLI reliably; Meadow will block those phases rather than pretend.

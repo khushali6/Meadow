@@ -1,4 +1,9 @@
+import path from "node:path";
 import { z } from "zod";
+import { getInvestigation, listInvestigations } from "./meadow/atlas/agents";
+import { mcpConfigSnippet } from "./meadow/atlas/mcpServer";
+import { atlasStatus, createDemo, evaluate, nodeDetail, pathBetween, startIngest, startInvestigation, systemMap, toolCatalogue } from "./meadow/atlas/service";
+import { listActions, runTool } from "./meadow/atlas/tools";
 import { publicProcedure, router } from "./_core/trpc";
 import { telegram, createPairingCode } from "./meadow/channels/telegram";
 import { getSecret, loadConfig, saveConfig, setSecret } from "./meadow/config";
@@ -24,13 +29,40 @@ const configPatch = z.object({
   screenshots: z.object({ enabled: z.boolean() }).partial().optional(),
   llm: z.object({ baseUrl: z.string().url(), model: z.string().min(1) }).partial().optional(),
   approvals: z.object({ expiryS: z.number().int().min(60) }).partial().optional(),
+  atlas: z.object({
+    rerank: z.boolean(),
+    maxAgentSteps: z.number().int().min(1).max(20),
+    connectors: z.object({
+      github: z.object({ enabled: z.boolean(), repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/).nullable() }).partial(),
+      jira: z.object({ enabled: z.boolean(), baseUrl: z.string().url().startsWith("https://").nullable(), email: z.string().email().nullable(), jql: z.string().max(500) }).partial(),
+      linear: z.object({ enabled: z.boolean(), teamKey: z.string().max(20).nullable() }).partial(),
+    }).partial(),
+  }).partial().optional(),
+});
+
+const atlasRouter = router({
+  status: publicProcedure.input(z.object({ projectId: z.number() })).query(({ input }) => atlasStatus(input.projectId)),
+  ingest: publicProcedure.input(z.object({ projectId: z.number() })).mutation(({ input }) => startIngest(input.projectId)),
+  map: publicProcedure.input(z.object({ projectId: z.number(), layer: z.enum(["architecture", "apis", "history", "code"]), focus: z.number().nullable().default(null), extra: z.array(z.number()).max(60).default([]) })).query(({ input }) => systemMap(input.projectId, input.layer, input.focus, input.extra)),
+  node: publicProcedure.input(z.object({ nodeId: z.number() })).query(({ input }) => nodeDetail(input.nodeId)),
+  path: publicProcedure.input(z.object({ from: z.number(), to: z.number() })).query(({ input }) => pathBetween(input.from, input.to)),
+  search: publicProcedure.input(z.object({ projectId: z.number(), query: z.string().min(2).max(500), mode: z.enum(["hybrid", "vector", "bm25", "graph", "symbol"]).default("hybrid") })).query(({ input }) => runTool("search_code", { query: input.query, mode: input.mode, k: 12 }, { projectId: input.projectId, actor: "ui" })),
+  investigate: publicProcedure.input(z.object({ projectId: z.number(), question: z.string().min(5).max(1000), mode: z.enum(["agentic", "hybrid", "graph", "vector"]).default("agentic") })).mutation(async ({ input }) => ({ id: await startInvestigation(input.projectId, input.question, input.mode) })),
+  investigations: publicProcedure.input(z.object({ projectId: z.number() })).query(({ input }) => listInvestigations(input.projectId)),
+  investigation: publicProcedure.input(z.object({ id: z.number() })).query(({ input }) => getInvestigation(input.id)),
+  runAction: publicProcedure.input(z.object({ projectId: z.number(), investigationId: z.number().nullable(), tool: z.enum(["propose_patch", "create_issue", "run_tests"]), args: z.record(z.string(), z.unknown()) })).mutation(({ input }) => runTool(input.tool, input.args, { projectId: input.projectId, actor: "ui", investigationId: input.investigationId })),
+  actions: publicProcedure.input(z.object({ projectId: z.number() })).query(({ input }) => listActions(input.projectId)),
+  tools: publicProcedure.query(() => toolCatalogue()),
+  evaluate: publicProcedure.input(z.object({ projectId: z.number() })).mutation(({ input }) => evaluate(input.projectId)),
+  demo: publicProcedure.mutation(() => createDemo()),
+  mcpConfig: publicProcedure.query(() => mcpConfigSnippet(path.resolve(process.argv[1] ?? "dist/cli.js"))),
 });
 
 function safeSettings() {
   const config = loadConfig();
   return {
     config,
-    secrets: { freellmapi: Boolean(getSecret("FREELLMAPI_API_KEY")), telegram: Boolean(getSecret("TELEGRAM_BOT_TOKEN")) },
+    secrets: { freellmapi: Boolean(getSecret("FREELLMAPI_API_KEY")), telegram: Boolean(getSecret("TELEGRAM_BOT_TOKEN")), github: Boolean(getSecret("GITHUB_TOKEN")), jira: Boolean(getSecret("JIRA_API_TOKEN")), linear: Boolean(getSecret("LINEAR_API_KEY")) },
     engines: engineNames().map(name => ({ name, label: engineLabel(name) })),
   };
 }
@@ -110,7 +142,7 @@ export const appRouter = router({
     saveConfig(input);
     return safeSettings();
   }),
-  setSecret: publicProcedure.input(z.object({ name: z.enum(["FREELLMAPI_API_KEY", "TELEGRAM_BOT_TOKEN"]), value: z.string().min(8).max(500) })).mutation(async ({ input }) => {
+  setSecret: publicProcedure.input(z.object({ name: z.enum(["FREELLMAPI_API_KEY", "TELEGRAM_BOT_TOKEN", "GITHUB_TOKEN", "JIRA_API_TOKEN", "LINEAR_API_KEY"]), value: z.string().min(8).max(500) })).mutation(async ({ input }) => {
     setSecret(input.name, input.value.trim());
     if (input.name === "TELEGRAM_BOT_TOKEN") {
       telegram.stop();
@@ -122,6 +154,7 @@ export const appRouter = router({
   exportRun: publicProcedure.input(z.object({ projectId: z.number() })).mutation(({ input }) => exportBundle(input.projectId)),
   doctor: publicProcedure.query(() => fullDoctor()),
   llmStatus: publicProcedure.query(() => llmStatus()),
+  atlas: atlasRouter,
 });
 
 export type AppRouter = typeof appRouter;

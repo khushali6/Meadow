@@ -185,3 +185,53 @@ describe("atlas tools", () => {
     expect(getDb().get<{ source: string }>("SELECT source FROM plans WHERE project_id = ? ORDER BY id DESC LIMIT 1", projectId)!.source).toBe("atlas");
   }, 30_000);
 });
+
+describe("atlas dashboard and chat", () => {
+  it("draws map layers and overlays investigation paths", async () => {
+    const { systemMap, nodeDetail, pathBetween } = await import("../../server/meadow/atlas/service");
+    const arch = systemMap(projectId, "architecture", null);
+    expect(arch.nodes.filter(node => node.kind === "service")).toHaveLength(6);
+    expect(arch.edges.length).toBeGreaterThan(5);
+    const pr = nodeId("pr:#482")!;
+    const withPr = systemMap(projectId, "architecture", null, [pr]);
+    expect(withPr.nodes.some(node => node.id === pr)).toBe(true);
+    const history = systemMap(projectId, "history", null);
+    expect(history.nodes.some(node => node.kind === "incident")).toBe(true);
+    const detail = nodeDetail(nodeId("service:payment-service")!);
+    expect(detail.edges.some(edge => edge.kind === "owned_by")).toBe(true);
+    const route = pathBetween(nodeId("service:api-gateway")!, nodeId("service:payment-service")!);
+    expect(route?.steps.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("starts an investigation and returns its id before it finishes", async () => {
+    const { startInvestigation } = await import("../../server/meadow/atlas/service");
+    const id = await startInvestigation(projectId, "Which services depend on payment-service?", "agentic");
+    expect(id).toBeGreaterThan(0);
+    for (let i = 0; i < 200 && getInvestigation(id)?.status === ("running" as string); i++) await new Promise(resolve => setTimeout(resolve, 50));
+    expect(getInvestigation(id)!.status).toBe("done");
+    expect(getInvestigation(id)!.trace.length).toBeGreaterThan(3);
+  });
+
+  it("answers /investigate in chat with live progress and action buttons", async () => {
+    const { chatInvestigate, chatAction } = await import("../../server/meadow/atlas/chat");
+    const cards: string[] = [];
+    const answer = await chatInvestigate(projectId, "Why did payment-service start timing out after release v2.4.0?", "telegram", card => cards.push(card));
+    expect(cards.length).toBeGreaterThan(2);
+    expect(cards.at(-1)).toMatch(/Verifier|Writer/);
+    expect(answer.text).toMatch(/#482/);
+    const patch = answer.buttons?.[0].find(button => button.action.endsWith(":patch"));
+    expect(patch).toBeTruthy();
+    const investigationId = Number(patch!.action.split(":")[1]);
+    const reply = await chatAction(investigationId, "issue", "telegram");
+    expect(reply).toMatch(/approv/i);
+    expect(listActions(projectId)[0]).toMatchObject({ tool: "create_issue", status: "pending", actor: "telegram" });
+  });
+
+  it("routes /investigate through the conversation layer", async () => {
+    const { handleText } = await import("../../server/meadow/intake/conversation");
+    await handleText("dashboard", "atlas-test", "/project acmepay");
+    const reply = await handleText("dashboard", "atlas-test", "/investigate who owns the ledger service?");
+    expect(reply.text).toMatch(/ledger/i);
+    expect(reply.text).toMatch(/claims verified/);
+  });
+});

@@ -1,3 +1,4 @@
+import { chatAction, chatInvestigate } from "../atlas/chat";
 import { loadConfig, saveConfig, type NotificationLevel } from "../config";
 import { decide } from "../core/approvals";
 import { getDb, now } from "../core/db";
@@ -13,7 +14,7 @@ import { contextSummary, gatherContext } from "./context";
 import { answerQuestion, appendPhases, buildSpec, classify, clarifyQuestions, generatePlan, improvePlan, looksLikePlanFile, projectNameFor, type Intent, type Question } from "./llm";
 
 export type Button = { label: string; action: string };
-export type Reply = { text: string; buttons?: Button[][]; planId?: number; shot?: { projectId: number; route: string | null } };
+export type Reply = { text: string; buttons?: Button[][]; planId?: number; shot?: { projectId: number; route: string | null }; investigate?: { projectId: number; question: string } };
 
 type ConversationState = {
   stage: "idle" | "clarifying" | "plan_review" | "awaiting_hint" | "awaiting_feature";
@@ -184,6 +185,7 @@ export async function handleText(channel: string, chatId: string, text: string):
   try {
     const reply = await routeText(state, text.trim());
     saveState(channel, chatId, state);
+    if (reply.investigate && channel !== "telegram") return await chatInvestigate(reply.investigate.projectId, reply.investigate.question, "ui");
     return reply;
   } catch (error) {
     saveState(channel, chatId, state);
@@ -282,6 +284,7 @@ const HELP = `Commands:
 /project <name> — switch project
 /projects — list projects
 /ask <question> — ask about the codebase
+/investigate <question> — CodeAtlas: multi-agent investigation with cited, verified evidence (also /why)
 /remember <text> — add a note to project memory
 /index — re-index the project
 /notify <all|phases|failures> — notification level
@@ -352,6 +355,13 @@ async function command(state: ConversationState, text: string): Promise<Reply> {
     case "/ask":
       if (!arg) return { text: "Usage: /ask where is login handled?" };
       return ask(state, arg);
+    case "/investigate":
+    case "/why":
+    case "/atlas": {
+      if (arg.length < 5) return { text: "Usage: /investigate why did payment-service start timing out after v2.4.0?" };
+      const projectId = requireProject(state);
+      return { text: `🔍 Investigating in ${getProject(projectId).name}…`, investigate: { projectId, question: arg } };
+    }
     case "/remember": {
       const projectId = requireProject(state);
       if (!arg) return { text: "Usage: /remember <text>" };
@@ -453,6 +463,8 @@ async function routeAction(state: ConversationState, action: string, actor: stri
       const row = decide(id, b === "yes" ? "approved" : "denied", actor);
       return { text: `${row.title}: ${row.status}.` };
     }
+    case "atlas":
+      return { text: await chatAction(id, b, actor.startsWith("telegram") ? "telegram" : "ui") };
     default:
       return { text: "That button is no longer valid." };
   }

@@ -35,10 +35,12 @@ export type InvestigationResult = {
   ms: number;
   error?: string;
 };
-export type InvestigateOptions = { mode?: Mode; actor?: ToolActor; at?: string | null; k?: number; record?: boolean };
+export type InvestigateOptions = { mode?: Mode; actor?: ToolActor; at?: string | null; k?: number; record?: boolean; onStart?: (id: number) => void };
 
 const AGENT_LABELS: Record<string, string> = { supervisor: "Supervisor", researcher: "Researcher", architect: "Architect", operator: "Operator", writer: "Writer", verifier: "Verifier" };
 const CAUSE_WORDS = /\b(why|cause[ds]?|root|broke|broken|what happened|regression|started failing)\b/i;
+
+const clip = (text: string, max: number) => (text.length <= max ? text : `${text.slice(0, max - 1)}…`);
 
 class Trace {
   constructor(readonly investigationId: number, readonly projectId: number, readonly record: boolean) {}
@@ -164,7 +166,7 @@ export function diffHighlights(diff: string, focus: string[]): string[] {
     else {
       removed.forEach((line, i) => {
         const next = added[i];
-        if (next !== undefined && next.trim() !== line.trim() && focus.some(term => `${line} ${next}`.toLowerCase().includes(term))) lines.push(`\`${line.trim().slice(0, 90)}\` → \`${next.trim().slice(0, 90)}\``);
+        if (next !== undefined && next.trim() !== line.trim() && focus.some(term => `${line} ${next}`.toLowerCase().includes(term))) lines.push(`\`${clip(line.trim(), 120)}\` → \`${clip(next.trim(), 120)}\``);
       });
     }
   }
@@ -393,6 +395,7 @@ export async function investigate(projectId: number, question: string, options: 
   const id = record ? getDb().insert("atlas_investigations", { project_id: projectId, question: redact(question), mode, status: "running", created_at: now() }) : 0;
   const trace = new Trace(id, projectId, record);
   const usage = emptyUsage();
+  options.onStart?.(id);
   try {
     const result = await runInvestigation(id, projectId, question, mode, options, trace, usage);
     result.ms = Date.now() - started;
