@@ -26,6 +26,19 @@ export type MeadowConfig = {
   telegram: { ownerId: number | null; notificationLevel: NotificationLevel; quietHours: { enabled: boolean; start: number; end: number }; voiceReplies: boolean };
   screenshots: { enabled: boolean };
   approvals: { expiryS: number };
+  atlas: {
+    /** LLM reranking of fused results; falls back to fusion order when the gateway is unavailable. */
+    rerank: boolean;
+    maxAgentSteps: number;
+    /** Opt-in issue trackers. Each one only talks to its service when enabled and its token is set. */
+    connectors: {
+      github: { enabled: boolean; repo: string | null };
+      jira: { enabled: boolean; baseUrl: string | null; email: string | null; jql: string };
+      linear: { enabled: boolean; teamKey: string | null };
+    };
+    /** External MCP servers the Operator agent may call (stdio). Env values are secret names, never literals. */
+    mcpServers: Array<{ name: string; command: string; args: string[]; env: string[] }>;
+  };
 };
 
 export const DEFAULT_CONFIG: MeadowConfig = {
@@ -38,6 +51,16 @@ export const DEFAULT_CONFIG: MeadowConfig = {
   telegram: { ownerId: null, notificationLevel: "all", quietHours: { enabled: false, start: 22, end: 8 }, voiceReplies: false },
   screenshots: { enabled: true },
   approvals: { expiryS: 30 * 60 },
+  atlas: {
+    rerank: true,
+    maxAgentSteps: 8,
+    connectors: {
+      github: { enabled: false, repo: null },
+      jira: { enabled: false, baseUrl: null, email: null, jql: "order by updated DESC" },
+      linear: { enabled: false, teamKey: null },
+    },
+    mcpServers: [],
+  },
 };
 
 export function meadowHome() {
@@ -109,7 +132,8 @@ export function resetConfigCache() {
 }
 
 /** Secrets come only from the environment or ~/.meadow/secrets.env (0600), never from config.json. */
-export type SecretName = "FREELLMAPI_API_KEY" | "TELEGRAM_BOT_TOKEN" | "CURSOR_API_KEY" | "ANTHROPIC_API_KEY" | "OPENAI_API_KEY" | "GEMINI_API_KEY";
+export type SecretName = "FREELLMAPI_API_KEY" | "TELEGRAM_BOT_TOKEN" | "CURSOR_API_KEY" | "ANTHROPIC_API_KEY" | "OPENAI_API_KEY" | "GEMINI_API_KEY" | "GITHUB_TOKEN" | "JIRA_API_TOKEN" | "LINEAR_API_KEY";
+export const SECRET_NAMES: SecretName[] = ["FREELLMAPI_API_KEY", "TELEGRAM_BOT_TOKEN", "CURSOR_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GITHUB_TOKEN", "JIRA_API_TOKEN", "LINEAR_API_KEY"];
 
 function readSecretsFile(): Record<string, string> {
   try {

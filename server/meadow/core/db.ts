@@ -148,6 +148,82 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY(channel, chat_id)
   );
   `,
+  `
+  CREATE TABLE atlas_nodes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    key TEXT NOT NULL,
+    name TEXT NOT NULL,
+    path TEXT,
+    props_json TEXT NOT NULL DEFAULT '{}',
+    valid_from TEXT,
+    valid_to TEXT,
+    source TEXT NOT NULL,
+    UNIQUE(project_id, key)
+  );
+  CREATE INDEX atlas_nodes_kind ON atlas_nodes(project_id, kind);
+  CREATE INDEX atlas_nodes_name ON atlas_nodes(project_id, name);
+  CREATE TABLE atlas_edges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    src INTEGER NOT NULL REFERENCES atlas_nodes(id) ON DELETE CASCADE,
+    dst INTEGER NOT NULL REFERENCES atlas_nodes(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    props_json TEXT NOT NULL DEFAULT '{}',
+    valid_from TEXT,
+    valid_to TEXT,
+    UNIQUE(src, dst, kind)
+  );
+  CREATE INDEX atlas_edges_src ON atlas_edges(src);
+  CREATE INDEX atlas_edges_dst ON atlas_edges(dst);
+  CREATE TABLE atlas_docs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    node_id INTEGER REFERENCES atlas_nodes(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    path TEXT,
+    text TEXT NOT NULL,
+    meta_json TEXT NOT NULL DEFAULT '{}',
+    ts TEXT,
+    embedding BLOB
+  );
+  CREATE INDEX atlas_docs_project ON atlas_docs(project_id);
+  CREATE INDEX atlas_docs_node ON atlas_docs(node_id);
+  CREATE VIRTUAL TABLE atlas_fts USING fts5(title, text, content='atlas_docs', content_rowid='id', tokenize='porter unicode61');
+  CREATE TRIGGER atlas_docs_ai AFTER INSERT ON atlas_docs BEGIN
+    INSERT INTO atlas_fts(rowid, title, text) VALUES (new.id, new.title, new.text);
+  END;
+  CREATE TRIGGER atlas_docs_ad AFTER DELETE ON atlas_docs BEGIN
+    INSERT INTO atlas_fts(atlas_fts, rowid, title, text) VALUES ('delete', old.id, old.title, old.text);
+  END;
+  CREATE TABLE atlas_investigations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    question TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    status TEXT NOT NULL,
+    answer TEXT,
+    result_json TEXT,
+    created_at TEXT NOT NULL,
+    finished_at TEXT
+  );
+  CREATE TABLE atlas_trace (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    investigation_id INTEGER NOT NULL REFERENCES atlas_investigations(id) ON DELETE CASCADE,
+    ts TEXT NOT NULL,
+    agent TEXT NOT NULL,
+    step TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    data_json TEXT
+  );
+  CREATE TABLE atlas_ingests (
+    project_id INTEGER PRIMARY KEY,
+    stats_json TEXT NOT NULL,
+    finished_at TEXT NOT NULL
+  );
+  `,
 ];
 
 export type Row = Record<string, SQLInputValue>;

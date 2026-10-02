@@ -18,7 +18,7 @@ export function isIgnored(relative: string): boolean {
   return PERMANENT_IGNORE.some(pattern => pattern.test(relative));
 }
 
-export function listProjectFiles(root: string): string[] {
+export function listProjectFiles(root: string, extra?: RegExp): string[] {
   const out: string[] = [];
   const walk = (dir: string) => {
     if (out.length >= MAX_FILES) return;
@@ -33,7 +33,7 @@ export function listProjectFiles(root: string): string[] {
       const rel = path.relative(root, full).split(path.sep).join("/");
       if (isIgnored(rel) || entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) walk(full);
-      else if (entry.isFile() && TEXT_EXT.test(entry.name)) out.push(rel);
+      else if (entry.isFile() && (TEXT_EXT.test(entry.name) || extra?.test(entry.name))) out.push(rel);
       if (out.length >= MAX_FILES) return;
     }
   };
