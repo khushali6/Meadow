@@ -115,8 +115,8 @@ function Dashboard() {
       const { reduceMotion, compact } = context.conditions as { reduceMotion: boolean; compact: boolean };
       const duration = reduceMotion ? 0 : compact ? 0.38 : 0.62;
       const intro = gsap.timeline({ defaults: { duration, ease: "power3.out" } });
-      intro.from(".sidebar", { x: -18, autoAlpha: 0, ease: "power2.out" }, 0)
-        .from(".topbar", { y: -10, autoAlpha: 0 }, "<0.08")
+      if (!compact) intro.from(".sidebar", { x: -18, autoAlpha: 0, ease: "power2.out", clearProps: "transform" }, 0);
+      intro.from(".topbar", { y: -10, autoAlpha: 0 }, compact ? 0 : "<0.08")
         .from(".page-header .eyebrow", { y: 14, autoAlpha: 0 }, "<0.12")
         .from(".page-header h1", { y: 28, autoAlpha: 0, clipPath: "inset(0 0 100% 0)" }, "<0.06")
         .from(".page-header p", { y: 14, autoAlpha: 0 }, "<0.16")

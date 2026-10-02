@@ -633,3 +633,4 @@ code, pre, kbd, .plan-editor, .code-block, .event-detail pre { font-family: var(
 
 @media (max-width: 1180px) { .run-grid { grid-template-columns: 260px minmax(0,1fr); } .inspector-panel { grid-column: 1 / -1; } }
 @media (max-width: 820px) { .run-grid { grid-template-columns: minmax(0,1fr); } .inspector-panel { grid-column: auto; } }
+@media (max-width: 820px) { .sidebar { box-shadow: none; } .sidebar.sidebar-open { box-shadow: 12px 0 30px rgba(0,0,0,.15); } }
