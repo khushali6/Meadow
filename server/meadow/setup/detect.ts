@@ -71,11 +71,15 @@ function packageDirs(root: string): string[] {
   return found;
 }
 
+/** Linters run from the project's environment when it has one; otherwise whatever is on PATH (pipx, brew, global). */
+const pythonTool = (dir: string, manager: string | null, args: string) => (manager === "uv" ? `uv run ${args}` : manager === "poetry" ? `poetry run ${args}` : fs.existsSync(path.join(dir, ".venv")) ? `${pythonIn(dir)} -m ${args}` : args);
+const pythonIn = (dir: string) => (fs.existsSync(path.join(dir, ".venv", process.platform === "win32" ? "Scripts" : "bin")) ? (process.platform === "win32" ? ".venv\\Scripts\\python" : ".venv/bin/python") : process.platform === "win32" ? "python" : "python3");
+
 /**
- * Adds languages, frameworks, test runners and databases found in one folder. Verify commands come only from the
- * root, because they run from the project root; `prefix` is the folder relative to it ("" for the root).
+ * Adds languages, frameworks, test runners and databases found in one folder. Checks run from the project root,
+ * so a package's commands are prefixed with `cd "<folder>" &&`, which works in both sh and cmd.exe.
  */
-function scanManifests(root: string, prefix: string, profile: ProjectProfile): boolean {
+function scanManifests(root: string, prefix: string, profile: ProjectProfile, packageCommands: DetectedCommand[] = []): boolean {
   const commands: DetectedCommand[] = [];
   const before = profile.markers.length;
   const mark = (file: string) => exists(root, file) && (profile.markers.push(prefix ? path.join(prefix, file).split(path.sep).join("/") : file), true);
@@ -112,10 +116,10 @@ function scanManifests(root: string, prefix: string, profile: ProjectProfile): b
     profile.packageManager ??= exists(root, "uv.lock") ? "uv" : exists(root, "poetry.lock") ? "poetry" : "pip";
     if (/pytest/i.test(text) || exists(root, "pytest.ini") || exists(root, "tests")) {
       add(profile.testFrameworks, "pytest");
-      commands.push({ kind: "test", cmd: profile.packageManager === "uv" ? "uv run pytest -q" : profile.packageManager === "poetry" ? "poetry run pytest -q" : "python -m pytest -q", source: "pytest" });
+      commands.push({ kind: "test", cmd: profile.packageManager === "uv" ? "uv run pytest -q" : profile.packageManager === "poetry" ? "poetry run pytest -q" : `${pythonIn(root)} -m pytest -q`, source: "pytest" });
     }
-    if (/\bmypy\b/i.test(text)) commands.push({ kind: "typecheck", cmd: "mypy .", source: "mypy" });
-    if (/\bruff\b/i.test(text)) commands.push({ kind: "lint", cmd: "ruff check .", source: "ruff" });
+    if (/\bmypy\b/i.test(text)) commands.push({ kind: "typecheck", cmd: pythonTool(root, profile.packageManager, "mypy ."), source: "mypy" });
+    if (/\bruff\b/i.test(text)) commands.push({ kind: "lint", cmd: pythonTool(root, profile.packageManager, "ruff check ."), source: "ruff" });
   }
   if (mark("go.mod")) {
     add(profile.languages, "Go");
@@ -140,6 +144,7 @@ function scanManifests(root: string, prefix: string, profile: ProjectProfile): b
   if (mark("Gemfile")) add(profile.languages, "Ruby");
   if (mark("composer.json")) add(profile.languages, "PHP");
   if (!prefix) profile.commands.push(...commands);
+  else packageCommands.push(...commands.map(command => ({ ...command, cmd: `cd "${prefix.split(path.sep).join("/")}" && ${command.cmd}`, source: `${prefix.split(path.sep).join("/")}/${command.source}` })));
   return profile.markers.length > before;
 }
 
@@ -159,7 +164,11 @@ function gitDirOf(root: string): string | null {
 export function detectProject(root: string): ProjectProfile {
   const profile: ProjectProfile = { root, languages: [], frameworks: [], packageManager: null, testFrameworks: [], buildSystem: null, git: { repo: false, remote: null, branch: null }, ci: [], databases: [], docker: { dockerfile: false, compose: false }, mcpConfigs: [], envExampleKeys: [], commands: [], markers: [], packages: [] };
   scanManifests(root, "", profile);
-  for (const dir of packageDirs(root)) if (scanManifests(path.join(root, dir), dir, profile)) profile.packages.push(dir.split(path.sep).join("/"));
+  const packageCommands: DetectedCommand[] = [];
+  for (const dir of packageDirs(root)) if (scanManifests(path.join(root, dir), dir, profile, packageCommands)) profile.packages.push(dir.split(path.sep).join("/"));
+  // A monorepo without root scripts is verified per package; the root command wins whenever it exists.
+  const rootKinds = new Set(profile.commands.map(command => command.kind));
+  profile.commands.push(...packageCommands.filter(command => !rootKinds.has(command.kind)).slice(0, 10));
   const mark = (file: string) => exists(root, file) && (profile.markers.push(file), true);
 
   profile.docker = { dockerfile: mark("Dockerfile"), compose: mark("docker-compose.yml") || mark("docker-compose.yaml") || mark("compose.yaml") || mark("compose.yml") };

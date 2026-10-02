@@ -5,6 +5,8 @@ import { motion, MotionButton } from "../components/animation/motion";
 import { ErrorNote } from "../components/common";
 import { TelegramConnect, type Patch } from "../components/settingsParts";
 import { trpc } from "../lib/trpc";
+import type { inferRouterOutputs } from "@trpc/server";
+import type { AppRouter } from "../../../server/routers";
 import type { Overview, Settings } from "../lib/types";
 
 const STEPS = [
@@ -26,12 +28,15 @@ function StepMark({ status, active }: { status: string | undefined; active: bool
   return <CircleDot size={13} className={active ? "accent" : undefined} />;
 }
 
-export function WelcomeView({ settings, overview, onNavigate }: { settings: Settings | undefined; overview: Overview | undefined; onNavigate: (path: string) => void }) {
+export function WelcomeView({ settings, overview, onNavigate, onProject }: { settings: Settings | undefined; overview: Overview | undefined; onNavigate: (path: string) => void; onProject: (id: number) => void }) {
   const utils = trpc.useUtils();
   const state = trpc.setup.state.useQuery(undefined, { refetchInterval: query => (query.state.data?.running.length ? 1000 : false) });
   const [stepId, setStepId] = useState<StepId | null>(null);
   const steps = state.data?.steps ?? {};
   const projectId = state.data?.projectId ?? null;
+  useEffect(() => {
+    if (projectId) onProject(projectId);
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
   const firstOpen = useMemo(() => STEPS.find(step => !["done", "skipped"].includes(steps[step.id]?.status ?? ""))?.id ?? "plan", [steps]);
   const current = stepId ?? firstOpen;
   const index = STEPS.findIndex(step => step.id === current);
@@ -73,8 +78,8 @@ export function WelcomeView({ settings, overview, onNavigate }: { settings: Sett
                 <span className="eyebrow">{String(index + 1).padStart(2, "0")} / {step.label.toUpperCase()}</span>
                 <h2>{step.title}</h2>
               </div>
-              {step.id === "repository" ? <RepositoryStep suggested={state.data.suggestedPath} projectId={projectId} onDone={next} /> : null}
-              {step.id === "llm" ? <ProviderStep onDone={next} onSkip={() => skip("llm")} /> : null}
+              {step.id === "repository" ? <RepositoryStep suggested={state.data.suggestedPath} projectId={projectId} steps={steps} running={state.data.running} onDone={next} /> : null}
+              {step.id === "llm" ? <ProviderStep stepStatus={steps.llm?.status} onDone={next} onSkip={() => skip("llm")} /> : null}
               {step.id === "codeatlas" ? <KnowledgeStep projectId={projectId} steps={steps} running={state.data.running} onDone={next} /> : null}
               {step.id === "mcp" ? <McpStep projectId={projectId} onDone={() => mark.mutate({ id: "mcp", status: "done", detail: "Reviewed" }, { onSuccess: next })} onSkip={() => skip("mcp")} /> : null}
               {step.id === "telegram" ? (
@@ -97,68 +102,166 @@ export function WelcomeView({ settings, overview, onNavigate }: { settings: Sett
   );
 }
 
-const looksAbsolute = (value: string) => /^["']?(\/|~(\/|\\|$)|[a-zA-Z]:[\\/]|\\\\)/.test(value.trim());
+type Steps = Partial<Record<string, { status: string; detail: string }>>;
+type SetupOut = inferRouterOutputs<AppRouter>["setup"];
+type ProviderRow = SetupOut["providers"]["providers"][number];
+type Health = SetupOut["useProvider"];
 
-function RepositoryStep({ suggested, projectId, onDone }: { suggested: string | null; projectId: number | null; onDone: () => void }) {
+function RepositoryStep({ suggested, projectId, steps, running, onDone }: { suggested: string | null; projectId: number | null; steps: Steps; running: string[]; onDone: () => void }) {
   const utils = trpc.useUtils();
   const [value, setValue] = useState(suggested ?? "");
-  const [target, setTarget] = useState(suggested ?? "");
-  const detect = trpc.setup.detect.useQuery({ path: target }, { enabled: looksAbsolute(target), retry: false });
-  const register = trpc.setup.register.useMutation({ onSuccess: () => { void utils.setup.state.invalidate(); void utils.overview.invalidate(); onDone(); } });
+  const [query, setQuery] = useState(suggested ?? "");
+  const locate = trpc.setup.locate.useQuery({ query }, { enabled: query.trim().length > 0, retry: false, refetchOnWindowFocus: false });
+  const registered = () => {
+    void utils.setup.state.invalidate();
+    void utils.overview.invalidate();
+    onDone();
+  };
+  const register = trpc.setup.register.useMutation({ onSuccess: registered });
+  const create = trpc.setup.create.useMutation({ onSuccess: registered });
+  const clone = trpc.setup.clone.useMutation({ onSuccess: () => utils.setup.state.invalidate() });
+  const cloning = running.includes("clone");
+  const [watching, setWatching] = useState(false);
+  useEffect(() => {
+    if (cloning) setWatching(true);
+    else if (watching) {
+      setWatching(false);
+      if (steps.repository?.status === "done") registered();
+    }
+  }, [cloning]); // eslint-disable-line react-hooks/exhaustive-deps
+  const data = locate.data;
+  const busy = register.isPending || create.isPending || clone.isPending || cloning;
   return (
     <div className="welcome-body">
-      <p>The full path to a repository on this machine. Meadow reads manifests, CI and editor configs to learn the stack; <code>.env</code> files and keys are never read.</p>
-      <form className="search-row" onSubmit={event => { event.preventDefault(); setTarget(value.trim()); }}>
-        <input className="text-input" value={value} onChange={event => setValue(event.target.value)} placeholder={navigator.userAgent.includes("Windows") ? "C:\\Users\\you\\code\\my-app" : "~/code/my-app"} aria-label="Repository path" spellCheck={false} />
-        <MotionButton className="button secondary" disabled={!looksAbsolute(value)}>Detect</MotionButton>
+      <p>Type the repository's name, and Meadow finds it in your code folders. A full path, <code>owner/repo</code> or a git URL works too; Meadow clones it to the right place for this computer. <code>.env</code> files and keys are never read.</p>
+      <form className="search-row" onSubmit={event => { event.preventDefault(); setQuery(value.trim()); }}>
+        <input className="text-input" value={value} onChange={event => setValue(event.target.value)} placeholder="my-app · ~/code/my-app · owner/repo" aria-label="Repository name, path or URL" spellCheck={false} />
+        <MotionButton className="button secondary" disabled={!value.trim() || locate.isFetching}>{locate.isFetching ? "Searching…" : "Find"}</MotionButton>
       </form>
-      <ErrorNote error={detect.error} />
-      {detect.data ? (
-        <ul className="detect-lines">
-          {detect.data.lines.length ? detect.data.lines.map((line, i) => (
-            <motion.li key={line} initial={{ opacity: 0, x: -4 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.05, duration: 0.2 }}><CheckCircle2 size={12} /> {line}</motion.li>
-          )) : <li className="muted">Nothing recognisable here yet. Meadow can still work in an empty folder.</li>}
-        </ul>
+      <ErrorNote error={locate.error} />
+      {locate.isFetching ? <p className="welcome-note"><Loader2 size={13} className="spin-slow" /> Looking through your code folders…</p> : null}
+      {data && !locate.isFetching ? (
+        <div className="provider-scan repo-results">
+          {data.matches.map((match, i) => (
+            <div key={match.path} className={`provider-scan-row repo-row ${i === 0 && match.exact ? "recommended" : ""}`}>
+              <span className="provider-scan-name">{match.name}<em>{match.registered ? "added" : match.git ? match.branch ?? "git" : "folder"}</em></span>
+              <span className="provider-scan-reason" title={match.path}>{match.path}<br />{match.lines.filter(line => !/^Git repository/.test(line)).slice(0, 5).join(" · ")}</span>
+              <MotionButton className={`button ${i === 0 ? "primary" : "secondary"}`} disabled={busy} onClick={() => register.mutate({ path: match.path })}>{register.isPending && register.variables?.path === match.path ? "Adding…" : "Use"} <ArrowRight size={14} /></MotionButton>
+            </div>
+          ))}
+          {data.clone ? (
+            <div className="provider-scan-row repo-row recommended">
+              <span className="provider-scan-name">Clone {data.clone.slug}<em>{data.clone.via}</em></span>
+              <span className="provider-scan-reason" title={data.clone.target}>{data.clone.url}<br />into {data.clone.target}{data.clone.exists ? " (folder exists)" : ""}</span>
+              <MotionButton className="button primary" disabled={busy} onClick={() => clone.mutate({ url: data.clone!.url, target: data.clone!.target })}>{cloning ? "Cloning…" : data.clone.exists ? "Use folder" : "Clone"}</MotionButton>
+            </div>
+          ) : null}
+          {data.create && !data.matches.some(match => match.exact) ? (
+            <div className="provider-scan-row repo-row">
+              <span className="provider-scan-name">New project<em>empty</em></span>
+              <span className="provider-scan-reason" title={data.create.target}>{data.matches.length ? `None of these? ` : `No repository called “${query}” on this computer. `}Create {data.create.target}</span>
+              <MotionButton className="button secondary" disabled={busy || data.create.exists} onClick={() => create.mutate({ target: data.create!.target })}>{create.isPending ? "Creating…" : data.create.exists ? "Exists" : "Create"}</MotionButton>
+            </div>
+          ) : null}
+        </div>
       ) : null}
+      {data && !locate.isFetching ? <p className="welcome-note">{data.kind === "path" ? "Using the path you typed." : `Searched ${data.searched} folders. New and cloned repositories go in ${data.placeDir} (${data.placeReason}).`}</p> : null}
+      {cloning ? <p className="welcome-note"><Loader2 size={13} className="spin-slow" /> {steps.repository?.detail || "Cloning…"}</p> : null}
+      {steps.repository?.status === "failed" && !cloning ? <p className="inline-error">{steps.repository.detail}</p> : null}
       <div className="welcome-actions">
-        <MotionButton className="button primary" disabled={!detect.data || register.isPending || value.trim() !== target} title={value.trim() !== target ? "Click Detect for the new path first" : undefined} onClick={() => register.mutate({ path: target })}>{register.isPending ? "Registering…" : "Use this repository"} <ArrowRight size={14} /></MotionButton>
         {projectId ? <MotionButton className="button secondary" onClick={onDone}>Keep current project</MotionButton> : null}
       </div>
-      <ErrorNote error={register.error} />
+      <ErrorNote error={register.error ?? create.error ?? clone.error} />
     </div>
   );
 }
 
-function ProviderStep({ onDone, onSkip }: { onDone: () => void; onSkip: () => void }) {
+function KeyField({ provider, onSaved }: { provider: ProviderRow; onSaved: () => void }) {
+  const [key, setKey] = useState("");
+  const [editing, setEditing] = useState(!provider.keySet);
+  const save = trpc.setup.saveKey.useMutation({ onSuccess: () => { setKey(""); setEditing(false); onSaved(); } });
+  if (!editing) return <span className="key-saved"><CheckCircle2 size={12} /> Key saved <button className="link-button" onClick={() => setEditing(true)}>Replace</button></span>;
+  return (
+    <form className="key-field" onSubmit={event => { event.preventDefault(); if (key.trim()) save.mutate({ provider: provider.id, key }); }}>
+      <input className="text-input" type="password" autoComplete="off" value={key} onChange={event => setKey(event.target.value)} placeholder={provider.keyHint} aria-label={`${provider.name} API key`} />
+      <MotionButton className="button secondary" disabled={key.trim().length < 8 || save.isPending}>{save.isPending ? "Saving…" : "Save key"}</MotionButton>
+      {provider.keySet ? <button type="button" className="link-button" onClick={() => setEditing(false)}>Cancel</button> : null}
+      <ErrorNote error={save.error} />
+    </form>
+  );
+}
+
+function HealthSteps({ health }: { health: Health }) {
+  return (
+    <ul className="detect-lines health-lines">
+      {health.steps.map(step => <li key={step.name} className={step.ok ? (step.skipped ? "muted" : "") : "bad"}>{step.ok ? <CheckCircle2 size={12} /> : <XCircle size={12} />} <b>{step.name}</b> {step.detail}</li>)}
+    </ul>
+  );
+}
+
+function ProviderStep({ stepStatus, onDone, onSkip }: { stepStatus: string | undefined; onDone: () => void; onSkip: () => void }) {
   const utils = trpc.useUtils();
   const scan = trpc.setup.providers.useQuery(undefined, { refetchOnWindowFocus: false });
-  const use = trpc.setup.useProvider.useMutation({ onSuccess: () => { void utils.setup.state.invalidate(); void utils.llm.providers.invalidate(); onDone(); } });
+  const [models, setModels] = useState<Record<string, string>>({});
+  const [embed, setEmbed] = useState<Record<string, boolean>>({});
+  const [health, setHealth] = useState<Health | null>(null);
+  const [auto, setAuto] = useState(false);
+  const use = trpc.setup.useProvider.useMutation({ onSuccess: data => { setHealth(data); void utils.setup.state.invalidate(); void utils.llm.providers.invalidate(); } });
+  const rank = (provider: ProviderRow) => (provider.id === scan.data?.recommended ? 0 : provider.available ? 1 : provider.needsKey && provider.type === "local" ? 2 : provider.type === "cloud" ? 3 : 4);
+  const providers = [...(scan.data?.providers ?? [])].sort((a, b) => rank(a) - rank(b));
+  const modelFor = (provider: ProviderRow) => models[provider.id] ?? provider.recommendedModel ?? provider.currentModel;
+  const run = (provider: ProviderRow) => use.mutate({ provider: provider.id, model: provider.type === "cloud" && !models[provider.id] ? null : modelFor(provider), embeddingModel: provider.embeddingModel && (embed[provider.id] ?? true) ? provider.embeddingModel : null });
+  // A detected local server is set up without a click: Meadow picks the model, then runs the real connection test.
+  useEffect(() => {
+    if (auto || !scan.data || stepStatus === "done" || use.isPending) return;
+    const pick = providers.find(provider => provider.id === scan.data!.recommended && provider.type === "local" && provider.recommendedModel);
+    setAuto(true);
+    if (pick) run(pick);
+  }, [scan.data]); // eslint-disable-line react-hooks/exhaustive-deps
   if (scan.isLoading) return <div className="welcome-body"><p><Loader2 size={13} className="spin-slow" /> Looking for keys and local model servers…</p></div>;
-  const providers = scan.data?.providers ?? [];
   return (
     <div className="welcome-body">
-      <p>Used for planning, questions and summaries. Local servers on this machine are found automatically; cloud providers need an agent key. Memory and embeddings stay local either way.</p>
+      <p>Used for planning, questions and summaries. Local servers are found and configured automatically: Meadow picks the best model your machine can run and tests it with a real request. For a gateway or cloud provider, paste its key below. Keys are stored only in <code>~/.meadow/secrets.env</code>.</p>
       <div className="provider-scan">
-        {providers.map(provider => (
-          <div key={provider.id} className={`provider-scan-row ${provider.available ? "ok" : ""} ${provider.id === scan.data?.recommended ? "recommended" : ""}`}>
-            <span className="provider-scan-name">{provider.name}<em>{provider.type}</em></span>
-            <span className="provider-scan-reason">{provider.reason}</span>
-            {provider.available ? <MotionButton className={`button ${provider.id === scan.data?.recommended ? "primary" : "secondary"}`} disabled={use.isPending} onClick={() => use.mutate({ provider: provider.id, models: provider.models })}>{provider.id === scan.data?.recommended ? "Use (recommended)" : "Use"}</MotionButton> : <span className="status-tag queued"><span />{provider.needsKey ? "Key needed" : provider.type === "cloud" ? "No key" : "Not running"}</span>}
-          </div>
-        ))}
+        {providers.map(provider => {
+          const chat = provider.choices.filter(choice => choice.kind === "chat");
+          const mine = health?.provider === provider.id;
+          return (
+            <div key={provider.id} className={`provider-block ${provider.available ? "ok" : ""} ${provider.id === scan.data?.recommended ? "recommended" : ""}`}>
+              <div className="provider-scan-row">
+                <span className="provider-scan-name">{provider.name}<em>{provider.type}</em></span>
+                <span className="provider-scan-reason">{provider.reason}</span>
+                {provider.available ? <MotionButton className={`button ${provider.id === scan.data?.recommended ? "primary" : "secondary"}`} disabled={use.isPending} onClick={() => run(provider)}>{use.isPending && use.variables?.provider === provider.id ? "Testing…" : provider.active && ((mine && health?.ok) || stepStatus === "done") ? "In use · Test again" : "Use and test"}</MotionButton> : <span className="status-tag queued"><span />{provider.needsKey ? "Key needed" : "Not running"}</span>}
+              </div>
+              {chat.length ? (
+                <div className="provider-detail">
+                  <label className="prompt-label">Chat model
+                    <select value={modelFor(provider)} onChange={event => setModels({ ...models, [provider.id]: event.target.value })}>
+                      {chat.map(choice => <option key={choice.id} value={choice.id} disabled={!choice.fits}>{choice.id}{choice.paramsB ? ` · ${choice.paramsB}B` : ""}{choice.id === provider.recommendedModel ? " · recommended" : ""}{choice.fits ? "" : " · too large"}</option>)}
+                    </select>
+                  </label>
+                  {provider.embeddingModel ? <label className="check-label"><input type="checkbox" checked={embed[provider.id] ?? true} onChange={event => setEmbed({ ...embed, [provider.id]: event.target.checked })} /> Use {provider.embeddingModel} for memory search</label> : null}
+                  {provider.pickReason ? <span className="welcome-note">{provider.pickReason}</span> : null}
+                </div>
+              ) : null}
+              {provider.secret && (provider.keyRequired || provider.type !== "local") ? <div className="provider-detail"><KeyField provider={provider} onSaved={() => void scan.refetch()} /></div> : null}
+              {mine && health ? <div className="provider-detail"><HealthSteps health={health} /></div> : null}
+            </div>
+          );
+        })}
       </div>
       {scan.data?.note ? <p className="welcome-note">{scan.data.note}</p> : null}
-      {providers.some(provider => !provider.available) ? <p className="welcome-note">Keys go in Runtime settings → Agent model, or in <code>~/.meadow/secrets.env</code>. Then scan again.</p> : null}
       <div className="welcome-actions">
-        <MotionButton className="button secondary" onClick={() => scan.refetch()} disabled={scan.isFetching}>Scan again</MotionButton>
-        <MotionButton className="button secondary" onClick={onSkip}>Continue without a model</MotionButton>
+        {health?.ok || stepStatus === "done" ? <MotionButton className="button primary" onClick={onDone}>Continue <ArrowRight size={14} /></MotionButton> : null}
+        <MotionButton className="button secondary" onClick={() => scan.refetch()} disabled={scan.isFetching}>{scan.isFetching ? "Scanning…" : "Scan again"}</MotionButton>
+        {!health?.ok && stepStatus !== "done" ? <MotionButton className="button secondary" onClick={onSkip}>Continue without a model</MotionButton> : null}
       </div>
       <ErrorNote error={use.error ?? scan.error} />
     </div>
   );
 }
 
-type Steps = Partial<Record<string, { status: string; detail: string }>>;
+
 
 function KnowledgeStep({ projectId, steps, running, onDone }: { projectId: number | null; steps: Steps; running: string[]; onDone: () => void }) {
   const utils = trpc.useUtils();
@@ -220,26 +323,59 @@ function VerifyStep({ projectId, steps, running, onDone }: { projectId: number |
   const busy = running.includes(`baseline:${projectId}`);
   const baseline = trpc.setup.baseline.useQuery({ projectId: projectId ?? 0 }, { enabled: Boolean(projectId) && !busy });
   const run = trpc.setup.runBaseline.useMutation({ onSuccess: () => utils.setup.state.invalidate() });
+  const installing = running.includes(`install:${projectId}`);
+  const plan = trpc.setup.installPlan.useQuery({ projectId: projectId ?? 0 }, { enabled: Boolean(projectId) && !installing });
+  const install = trpc.setup.install.useMutation({ onSuccess: () => utils.setup.state.invalidate() });
   useEffect(() => {
     if (!busy) void baseline.refetch();
   }, [busy]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!installing) void plan.refetch();
+  }, [installing]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!projectId) return <div className="welcome-body"><p>Choose a repository first.</p></div>;
+  const lastRun = new Map((plan.data?.last?.results ?? []).map(result => [`${result.dir}|${result.label}`, result]));
   return (
     <div className="welcome-body">
+      {plan.data?.steps.length ? (
+        <>
+          <p>Install dependencies first, with the tools this project uses on this computer (Python gets its own <code>.venv</code>). This runs the project's install scripts, so only do it for code you trust.</p>
+          <div className="welcome-frame progress-rows install-rows">
+            {plan.data.steps.map(step => {
+              const result = lastRun.get(`${step.dir}|${step.label}`);
+              const status = step.missing ? "skipped" : result ? (result.ok ? "done" : "failed") : "pending";
+              return (
+                <div key={`${step.dir}|${step.command}`} className={`progress-row ${status}`} title={result && !result.ok ? result.output : undefined}>
+                  <StepMark status={status} active={false} />
+                  <strong>{step.label}</strong>
+                  <span><code>{step.command}</code>{step.missing ? ` · ${step.missing}` : result ? ` · ${(result.durationMs / 1000).toFixed(1)}s${result.ok ? "" : ` · ${result.output.split("\n").filter(Boolean).pop() ?? "failed"}`}` : ""}</span>
+                </div>
+              );
+            })}
+            {installing ? <div className="progress-row running"><Loader2 size={13} className="spin-slow" /><strong>Installing</strong><span>{steps.verify?.detail}</span></div> : null}
+          </div>
+          <div className="welcome-actions">
+            <MotionButton className="button secondary" disabled={installing || install.isPending || plan.data.steps.every(step => step.missing)} onClick={() => install.mutate({ projectId })}>{installing ? "Installing…" : plan.data.last ? "Install again" : "Install dependencies"}</MotionButton>
+          </div>
+          <ErrorNote error={install.error} />
+        </>
+      ) : null}
       <p>Runs the detected typecheck, lint, test and build commands once with a minimal environment. Checks that pass now are enforced after every phase, so agents can't quietly break them.</p>
       <div className="welcome-frame progress-rows">
-        {baseline.data?.results.map(result => (
-          <div key={result.cmd} className={`progress-row ${result.passed ? "done" : "failed"}`}>
-            <StepMark status={result.passed ? "done" : "failed"} active={false} />
-            <strong>{result.kind}</strong>
-            <span><code>{result.cmd}</code> · {(result.durationMs / 1000).toFixed(1)}s</span>
-          </div>
-        ))}
+        {baseline.data?.results.map(result => {
+          const status = result.passed ? "done" : result.missingTool ? "skipped" : "failed";
+          return (
+            <div key={result.cmd} className={`progress-row ${status}`} title={result.passed ? undefined : result.output}>
+              <StepMark status={status} active={false} />
+              <strong>{result.kind}</strong>
+              <span><code>{result.cmd}</code> · {result.missingTool ? "tool not installed, skipped" : `${(result.durationMs / 1000).toFixed(1)}s${result.passed ? "" : " · failing now, not enforced"}`}</span>
+            </div>
+          );
+        })}
         {busy ? <div className="progress-row running"><Loader2 size={13} className="spin-slow" /><strong>Running</strong><span>{steps.verify?.detail}</span></div> : null}
         {!busy && !baseline.data ? <div className="progress-row"><CircleDot size={13} /><strong>Not run</strong><span>{steps.verify?.status === "skipped" ? steps.verify.detail : "Run once to set the baseline"}</span></div> : null}
       </div>
       <div className="welcome-actions">
-        <MotionButton className="button primary" disabled={busy || run.isPending} onClick={() => run.mutate({ projectId })}>{busy ? "Running…" : baseline.data ? "Run again" : "Run checks"}</MotionButton>
+        <MotionButton className="button primary" disabled={busy || installing || run.isPending} onClick={() => run.mutate({ projectId })}>{busy ? "Running…" : baseline.data ? "Run again" : "Run checks"}</MotionButton>
         {baseline.data || steps.verify?.status === "skipped" ? <MotionButton className="button secondary" onClick={onDone}>Continue <ArrowRight size={14} /></MotionButton> : null}
       </div>
       <ErrorNote error={run.error} />

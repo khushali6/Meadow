@@ -30,6 +30,15 @@ export function minimalEnv(extra: Record<string, string | undefined> = {}): Reco
   return env;
 }
 
+const NETWORK_ENV_ALLOW = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy", "SSH_AUTH_SOCK", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "GIT_SSL_CAINFO", "PIP_INDEX_URL", "npm_config_registry", "GOPROXY"];
+
+/** minimalEnv plus what network tools need to work behind proxies and with SSH agents (clone, dependency installs). */
+export function networkEnv(extra: Record<string, string | undefined> = {}): Record<string, string> {
+  const picked: Record<string, string | undefined> = {};
+  for (const key of NETWORK_ENV_ALLOW) picked[key] = process.env[key];
+  return minimalEnv({ ...picked, ...extra });
+}
+
 export function spawnGroup(command: string, args: string[], options: { cwd: string; env: Record<string, string>; shell?: boolean }): ChildProcess {
   return spawn(command, args, {
     cwd: options.cwd,

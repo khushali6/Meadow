@@ -37,7 +37,7 @@ describe("portable paths", () => {
 });
 
 describe("monorepo detection", () => {
-  it("finds languages in services/* and apps/* but takes verify commands only from the root", () => {
+  it("finds languages in services/* and apps/* but fills verify commands the root lacks from packages", () => {
     const root = path.join(dir, "mono");
     write("mono/package.json", JSON.stringify({ packageManager: "pnpm@10.0.0", scripts: { test: "vitest run" }, devDependencies: { vitest: "2" } }));
     write("mono/services/payments/go.mod", "module payments\n");
@@ -51,7 +51,12 @@ describe("monorepo detection", () => {
     expect(profile.databases).toContain("PostgreSQL");
     expect(profile.databases).not.toContain("MongoDB");
     expect(profile.packageManager).toBe("pnpm");
-    expect(profile.commands).toEqual([{ kind: "test", cmd: "pnpm test", source: "package.json scripts.test" }]);
+    expect(profile.commands).toEqual([
+      { kind: "test", cmd: "pnpm test", source: "package.json scripts.test" },
+      { kind: "build", cmd: 'cd "apps/web" && pnpm build', source: "apps/web/package.json scripts.build" },
+      { kind: "build", cmd: 'cd "services/payments" && go build ./...', source: "services/payments/go.mod" },
+      { kind: "lint", cmd: 'cd "services/payments" && go vet ./...', source: "services/payments/go.mod" },
+    ]);
   });
 
   it("reads branch and remote from a worktree whose .git is a file", () => {

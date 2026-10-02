@@ -90,7 +90,13 @@ async function init() {
   const current = resolveProvider(def.id);
   const settings: Record<string, string> = {};
   if (def.type !== "cloud") settings.baseUrl = await ask(`${def.name} base URL`, current.baseUrl);
-  settings.model = await ask("Chat model", current.model || def.defaults.model);
+  const found = scan.providers.find(item => item.id === def.id);
+  if (found?.pickReason) console.log(`  ${found.pickReason}`);
+  settings.model = await ask("Chat model", found?.recommendedModel ?? (current.model || def.defaults.model));
+  if (found?.embeddingModel && (await ask(`Use ${found.embeddingModel} for memory search? (Y/n)`, "y")).toLowerCase() !== "n") {
+    settings.embeddingModel = found.embeddingModel;
+    saveConfig({ memory: { embeddings: "provider", embeddingProvider: def.id } });
+  }
   if (def.id === "freellmapi") saveConfig({ llm: { provider: def.id, ...settings } });
   else saveConfig({ llm: { provider: def.id, providers: { [def.id]: settings } } });
   if (def.secret && (!getSecret(def.secret) || (await ask(`Replace the stored ${def.name} key? (y/N)`, "n")).toLowerCase() === "y")) {

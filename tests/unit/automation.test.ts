@@ -56,7 +56,7 @@ describe("project detection", () => {
     const profile = detectProject(py);
     expect(profile.languages).toEqual(["Python"]);
     expect(profile.frameworks).toContain("FastAPI");
-    expect(profile.commands.map(command => command.cmd)).toEqual(expect.arrayContaining(["uv run pytest -q", "ruff check .", "mypy ."]));
+    expect(profile.commands.map(command => command.cmd)).toEqual(expect.arrayContaining(["uv run pytest -q", "uv run ruff check .", "uv run mypy ."]));
     const go = path.join(env.root, "go");
     write(go, "go.mod", "module x");
     expect(detectProject(go).commands.map(command => command.kind)).toEqual(["build", "test", "lint"]);

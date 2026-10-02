@@ -266,7 +266,7 @@ function Dashboard() {
           {location === "/map" ? <Suspense fallback={<div className="event-empty">Loading the system map…</div>}><SystemMapView key={project?.id ?? 0} project={project} onNavigate={go} /></Suspense> : null}
           {location === "/metrics" ? <Suspense fallback={<div className="event-empty">Loading metrics…</div>}><MetricsView key={project?.id ?? 0} project={project} /></Suspense> : null}
           {location === "/settings" ? <SettingsView settings={settings.data} overview={overview.data} project={project} onNavigate={go} /> : null}
-          {location === "/welcome" ? <WelcomeView settings={settings.data} overview={overview.data} onNavigate={go} /> : null}
+          {location === "/welcome" ? <WelcomeView settings={settings.data} overview={overview.data} onNavigate={go} onProject={setProjectId} /> : null}
           {!["/", "/plans", "/request", "/projects", "/approvals", "/memory", "/atlas", "/map", "/metrics", "/settings", "/welcome"].includes(location) ? <EmptyState icon={Leaf} title="Page not found" body="That page doesn't exist." action={<MotionButton className="button primary" onClick={() => go("/")}>Back to the live console</MotionButton>} /> : null}
         </div>
       </main>

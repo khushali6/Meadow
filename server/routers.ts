@@ -13,6 +13,8 @@ import { decide, listApprovals } from "./meadow/core/approvals";
 import { auditLog, RISK_POLICY } from "./meadow/core/audit";
 import { getDb } from "./meadow/core/db";
 import { userPath } from "./meadow/core/paths";
+import { cloneRepository, createProjectFolder, locateRepository } from "./meadow/setup/locate";
+import { commandLine, installPlan, lastInstall, runInstall } from "./meadow/setup/install";
 import { fullDoctor, llmStatus } from "./meadow/doctor";
 import { PROVIDERS } from "./meadow/llm/catalog";
 import { healthCheck, llmRouting, providerFor, providerSummaries } from "./meadow/llm/router";
@@ -38,7 +40,7 @@ import { diagnose, diagnoseAndRepair } from "./meadow/setup/health";
 import { liveGraph } from "./meadow/setup/live";
 import { discoverMcp, EXTERNAL_POLICY, importMcp, mcpCapabilities, removeMcp } from "./meadow/setup/mcp";
 import { buildKnowledge, completeOnboarding, generateInitialPlan, markStep, ONBOARDING_STEPS, onboardingState, registerRepository, resetOnboarding } from "./meadow/setup/onboarding";
-import { scanProviders, useProvider } from "./meadow/setup/providers";
+import { saveProviderKey, scanProviders, useProvider } from "./meadow/setup/providers";
 import { baselineOf, runBaseline } from "./meadow/setup/verify";
 
 const DASHBOARD = { channel: "dashboard", chat: "local" } as const;
@@ -159,12 +161,48 @@ const setupRouter = router({
     markStep("repository", "done", `${result.project.name} at ${result.project.path}`, result.project.id);
     return { project: result.project, created: result.created, lines: profileLines(result.profile) };
   }),
-  providers: publicProcedure.query(() => scanProviders()),
-  useProvider: publicProcedure.input(z.object({ provider: providerId, models: z.array(z.string().max(200)).max(50).default([]) })).mutation(({ input }) => {
-    useProvider(input.provider, input.models);
-    markStep("llm", "done", input.provider);
-    return llmRouting();
+  locate: publicProcedure.input(z.object({ query: z.string().trim().min(1).max(500) })).query(({ input }) => locateRepository(input.query)),
+  clone: publicProcedure.input(z.object({ url: z.string().min(3).max(500), target: z.string().min(1).max(1000) })).mutation(({ input }) => {
+    const target = userPath(input.target);
+    if (!target) throw new Error("Use a full path for the clone target.");
+    return background("clone", async () => {
+      markStep("repository", "running", `Cloning into ${target}`);
+      try {
+        const dir = await cloneRepository(input.url, target, detail => markStep("repository", "running", detail));
+        const result = await registerRepository(dir);
+        markStep("repository", "done", `${result.project.name} at ${result.project.path}`, result.project.id);
+      } catch (error) {
+        markStep("repository", "failed", (error as Error).message);
+      }
+    });
   }),
+  create: publicProcedure.input(z.object({ target: z.string().min(1).max(1000) })).mutation(async ({ input }) => {
+    const target = userPath(input.target);
+    if (!target) throw new Error("Use a full path for the new project.");
+    const result = await registerRepository(createProjectFolder(target));
+    markStep("repository", "done", `${result.project.name} at ${result.project.path} (new)`, result.project.id);
+    return { project: result.project };
+  }),
+  providers: publicProcedure.query(() => scanProviders()),
+  saveKey: publicProcedure.input(z.object({ provider: providerId, key: z.string().min(8).max(500) })).mutation(({ input }) => {
+    saveProviderKey(input.provider, input.key);
+    return { saved: true };
+  }),
+  useProvider: publicProcedure.input(z.object({ provider: providerId, model: z.string().max(200).nullish(), embeddingModel: z.string().max(200).nullish() })).mutation(async ({ input }) => {
+    const health = await useProvider(input.provider, { model: input.model, embeddingModel: input.embeddingModel });
+    markStep("llm", health.ok ? "done" : "failed", health.ok ? `${input.provider} · ${health.model}` : health.steps.find(step => !step.ok)?.detail ?? "Connection test failed");
+    return health;
+  }),
+  installPlan: publicProcedure.input(z.object({ projectId: z.number() })).query(async ({ input }) => ({ steps: (await installPlan(getProject(input.projectId).path)).map(step => ({ ...step, command: commandLine(step) })), last: lastInstall(input.projectId) })),
+  install: publicProcedure.input(z.object({ projectId: z.number() })).mutation(({ input }) => background(`install:${input.projectId}`, async () => {
+    const before = onboardingState().steps.verify;
+    markStep("verify", "running", "Installing dependencies");
+    try {
+      await runInstall(input.projectId, detail => markStep("verify", "running", detail));
+    } finally {
+      markStep("verify", before?.status ?? "pending", before?.detail ?? "");
+    }
+  })),
   build: publicProcedure.input(z.object({ projectId: z.number() })).mutation(({ input }) => background(`build:${input.projectId}`, async () => {
     markStep("codeatlas", "running", "Starting");
     try {
@@ -173,7 +211,7 @@ const setupRouter = router({
         else markStep("codeatlas", "running", `${step}${detail ? `: ${detail}` : ""}`);
       });
       markStep("codeatlas", "done", `${graph.services} services, ${graph.functions} functions, ${graph.apis} APIs, ${graph.tables} tables in ${(graph.ms / 1000).toFixed(1)}s`);
-      markStep("memory", "done", `${memory.files} files, ${memory.chunks} chunks${memory.embedded ? ", embedded locally" : ""}`);
+      markStep("memory", "done", `${memory.files} files, ${memory.chunks} chunks${memory.embedded ? `, embedded with ${memory.embedder}` : ""}`);
     } catch (error) {
       markStep("codeatlas", "failed", (error as Error).message);
     }

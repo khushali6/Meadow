@@ -7,6 +7,7 @@ import { bus } from "../core/events";
 import { portableCheck } from "../core/checks";
 import { userPath } from "../core/paths";
 import { getSetting, putSetting } from "../core/settings";
+import { currentSpace } from "../memory/embeddings";
 import { activePlan, createProject, getProject, latestPlan, listProjects, savePlanVersion, type ProjectRow } from "../projects";
 import { indexProject } from "../rag/index";
 import { analyzeRepository, type RepoAnalysis } from "./analysis";
@@ -67,10 +68,11 @@ export async function registerRepository(root: string): Promise<{ project: Proje
 export async function buildKnowledge(projectId: number, onProgress: (step: string, detail: string) => void = () => undefined) {
   const project = getProject(projectId);
   const graph = await ingestProject(projectId, (step, detail) => onProgress(step, detail ?? ""));
-  onProgress("memory", "Embedding code and docs locally");
+  const space = currentSpace();
+  onProgress("memory", space?.backend === "provider" ? `Embedding code and docs with ${space.model} (${space.provider})` : "Embedding code and docs locally");
   const memory = await indexProject(projectId, project.path);
   await liveGraph.markIndexed(projectId).catch(() => undefined);
-  return { graph, memory };
+  return { graph, memory: { ...memory, embedder: space?.backend === "provider" ? `${space.model} via ${space.provider}` : "Meadow's built-in local embedder" } };
 }
 
 const yamlBlock = (data: unknown) => stringify(data, { lineWidth: 0 }).trimEnd();
@@ -81,8 +83,10 @@ const yamlBlock = (data: unknown) => stringify(data, { lineWidth: 0 }).trimEnd()
  */
 export function initialPlanMarkdown(project: ProjectRow, profile: ProjectProfile, analysis: RepoAnalysis, baseline: Baseline | null): string {
   const passing = baseline?.results.filter(result => result.passed) ?? [];
-  const failing = baseline?.results.filter(result => !result.passed) ?? [];
-  const testCmd = profile.commands.find(command => command.kind === "test")?.cmd;
+  // A missing compiler or runtime can't be fixed by editing code, so it never becomes a task.
+  const failing = baseline?.results.filter(result => !result.passed && !result.missingTool) ?? [];
+  // Package-scoped commands (`cd "pkg" && …`) cover one package, so they can't stand in for the project's test suite.
+  const testCmd = profile.commands.find(command => command.kind === "test" && !command.cmd.startsWith("cd "))?.cmd;
   // Every phase needs a check that can fail: known commands first, otherwise a measurable condition on the tree.
   const gate = (preferred: string | undefined, fallback: Array<{ cmd: string }>) => {
     const cmds = [preferred, ...passing.map(result => result.cmd)].filter((cmd, i, all): cmd is string => Boolean(cmd) && all.indexOf(cmd) === i);
