@@ -14,6 +14,8 @@ import { expireOrphanedApprovals, sweepExpiredApprovals } from "../meadow/core/a
 import { getDb } from "../meadow/core/db";
 import { bus, eventsAfter, startForeignEventRelay } from "../meadow/core/events";
 import { harness } from "../meadow/harness/runner";
+import { startHealthMonitor } from "../meadow/setup/health";
+import { liveGraph } from "../meadow/setup/live";
 import { screenshotFile } from "../meadow/service";
 import { stopAllPreviews } from "../meadow/visual/preview";
 import { serveStatic } from "./vite";
@@ -116,9 +118,12 @@ export async function startDaemon(options: { port?: number; dev?: boolean } = {}
   await telegram.start();
   const notifier = new Notifier(telegram);
   notifier.start();
+  if (config.atlas.liveUpdate) liveGraph.start({ isBusy: id => harness.isActive(id) });
+  const stopHealth = startHealthMonitor();
+  if (interrupted.length && config.harness.autoResume) setTimeout(() => harness.autoResume(interrupted), 5_000).unref();
 
   const url = `http://${config.server.host}:${port}/?token=${token}`;
-  console.log(`\n  Meadow is running locally.\n  Dashboard: ${url}\n  Data: ${meadowHome()}\n${interrupted ? `  ${interrupted} interrupted run(s) can be resumed from the dashboard or Telegram.\n` : ""}${migrated.map(item => `  ${item.project}: ${item.from} is not available yet, switched to ${item.to}.\n`).join("")}`);
+  console.log(`\n  Meadow is running locally.\n  Dashboard: ${url}\n  Data: ${meadowHome()}\n${interrupted.length ? `  ${interrupted.length} interrupted run(s) ${config.harness.autoResume ? "will resume automatically" : "can be resumed from the dashboard or Telegram"}.\n` : ""}${migrated.map(item => `  ${item.project}: ${item.from} is not available yet, switched to ${item.to}.\n`).join("")}`);
 
   let closing = false;
   const shutdown = async () => {
@@ -127,6 +132,8 @@ export async function startDaemon(options: { port?: number; dev?: boolean } = {}
     console.log("\n  Stopping Meadow…");
     notifier.stop();
     telegram.stop();
+    liveGraph.stop();
+    stopHealth();
     stopRelay();
     clearInterval(sweep);
     await closeExternalClients();

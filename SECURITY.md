@@ -80,6 +80,17 @@ After every engine run and before any commit:
 - Screenshots are taken only from the preview URL declared in the plan, which must be localhost; navigation to any other origin is blocked. Pages whose text contains secret patterns are not saved.
 - The search index permanently ignores `.env*`, key and certificate files, credential files, `node_modules`, build output and `.git`.
 
+### Automation
+
+- Project detection reads marker files only. `.env` is never opened; from `.env.example` only key names are kept. Git remote URLs are stored with credentials stripped.
+- Provider discovery probes loopback ports only and checks whether keys exist; it never reads key values into the UI or logs, and never uses engine keys for the agent.
+- Importing a discovered MCP server needs an explicit click and copies only the command and arguments. `env` values in editor configs are never read; only names of secrets Meadow manages are passed through, from `~/.meadow/secrets.env` or the environment. HTTP MCP servers are not connected.
+- External MCP tool annotations are treated as hints from an untrusted server: a destructive name overrides a read-only claim. Read tools run without approval; write and destructive tools are queued with the normal expiring, default-deny approvals.
+- Baseline and automatic checks run with the same minimal environment as engines. Only commands detected from the project's own manifests are run.
+- The initial plan is saved as a draft. Nothing in setup, live updates, health repair or auto-resume approves a plan or executes a write tool. Auto-resume is off by default and continues only an already approved plan.
+- Database backups (`~/.meadow/backups/`) are created with owner-only permissions and contain the same data as `meadow.db` (no secrets; secrets are never stored in the database).
+- Update manifests must be signed with the publisher's Ed25519 key built into the binary, and must point to HTTPS; redirects are refused when fetching the manifest and the download must match the signed SHA-256. Nothing is installed without your confirmation (`--yes` to skip the prompt).
+
 ## Reporting a vulnerability
 
 Please report security issues privately to the maintainers rather than opening a public issue. Include steps to reproduce and the output of `meadow doctor` with any secrets removed. We aim to respond within a week.

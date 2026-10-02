@@ -31,7 +31,8 @@ MEADOW_HOME=/tmp/meadow-dev MEADOW_PROJECTS_DIR=/tmp/meadow-dev/projects MEADOW_
   - `memory/` — local embeddings and embedding spaces
   - `brief/` — project brief, status and plan-next-steps
   - `atlas/` — CodeAtlas graph, retrieval, agents, tools, change impact, MCP
-  - `rag/`, `visual/`, `core/` (db, events, git, exec, redaction, approvals)
+  - `setup/` — project detection, provider and MCP discovery, repository analysis, baseline checks, live graph, preflight impact, health and repair, onboarding
+  - `rag/`, `visual/`, `core/` (db and migrations with backup and rollback, events, git, exec, redaction, approvals, signed updates)
 - `client/` — React dashboard.
 - `tests/` — unit, conformance (engine stream parsing against recorded sessions) and integration tests.
 
@@ -41,7 +42,8 @@ MEADOW_HOME=/tmp/meadow-dev MEADOW_PROJECTS_DIR=/tmp/meadow-dev/projects MEADOW_
 - Every engine adapter change needs a recorded session fixture in `tests/fixtures/sessions/` and a conformance test.
 - Never log or emit a secret. Route new output through `redact()`.
 - Child processes get `minimalEnv()`, never `process.env`.
-- Database changes are new numbered migrations in `server/meadow/core/db.ts`; never edit an existing one.
+- Database changes are new numbered migrations in `server/meadow/core/db.ts`; never edit an existing one. Existing databases are backed up before migrating and restored if a migration or the integrity check fails, so a migration must be safe to run inside one transaction.
+- Anything automatic (setup, live updates, repair, auto-resume) may index, check and draft, but must never approve a plan or run a write tool. Those stay behind the approval queue.
 
 ## Pull requests
 

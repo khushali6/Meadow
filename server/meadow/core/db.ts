@@ -268,31 +268,77 @@ const MIGRATIONS: string[] = [
 
 export type Row = Record<string, SQLInputValue>;
 
-export class Db {
-  readonly raw: DatabaseSyncType;
+export class MigrationError extends Error {}
 
-  constructor(file: string) {
+const KEEP_BACKUPS = 5;
+
+export class Db {
+  raw: DatabaseSyncType;
+  /** Path of the backup taken before the last schema upgrade, if one was needed. */
+  lastBackup: string | null = null;
+
+  constructor(private readonly file: string, migrations: string[] = MIGRATIONS) {
     if (file !== ":memory:") fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-    this.raw = new DatabaseSync(file);
-    this.raw.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
-    this.migrate();
+    this.raw = this.open();
+    this.migrate(migrations);
   }
 
-  private migrate() {
+  private open() {
+    const raw = new DatabaseSync(this.file);
+    raw.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
+    return raw;
+  }
+
+  /** A consistent copy of the database (VACUUM INTO), pruned to the newest few. */
+  backup(label: string): string | null {
+    if (this.file === ":memory:") return null;
+    const dir = path.join(path.dirname(this.file), "backups");
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const target = path.join(dir, `meadow-${label}-${new Date().toISOString().replace(/[:.]/g, "-")}.db`);
+    this.raw.exec(`VACUUM INTO '${target.replace(/'/g, "''")}'`);
+    fs.chmodSync(target, 0o600);
+    const old = fs.readdirSync(dir).filter(name => /^meadow-.*\.db$/.test(name)).sort().reverse().slice(KEEP_BACKUPS);
+    for (const name of old) fs.rmSync(path.join(dir, name), { force: true });
+    return target;
+  }
+
+  private restore(from: string) {
+    this.raw.close();
+    for (const suffix of ["-wal", "-shm"]) fs.rmSync(`${this.file}${suffix}`, { force: true });
+    fs.copyFileSync(from, this.file);
+    this.raw = this.open();
+  }
+
+  private migrate(migrations: string[]) {
     this.raw.exec("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)");
     const row = this.raw.prepare("SELECT MAX(version) AS v FROM schema_version").get() as { v: number | null };
-    let current = row?.v ?? 0;
-    while (current < MIGRATIONS.length) {
-      this.raw.exec("BEGIN");
-      try {
-        this.raw.exec(MIGRATIONS[current]);
-        current += 1;
-        this.raw.prepare("INSERT INTO schema_version (version) VALUES (?)").run(current);
-        this.raw.exec("COMMIT");
-      } catch (error) {
-        this.raw.exec("ROLLBACK");
-        throw error;
+    const start = row?.v ?? 0;
+    let current = start;
+    if (current >= migrations.length) return;
+    // A fresh database has nothing to lose; an existing one is copied before its schema changes.
+    const backup = start > 0 ? this.backup(`v${start}`) : null;
+    this.lastBackup = backup;
+    try {
+      while (current < migrations.length) {
+        this.raw.exec("BEGIN");
+        try {
+          this.raw.exec(migrations[current]);
+          current += 1;
+          this.raw.prepare("INSERT INTO schema_version (version) VALUES (?)").run(current);
+          this.raw.exec("COMMIT");
+        } catch (error) {
+          this.raw.exec("ROLLBACK");
+          throw new MigrationError(`Database migration ${current + 1} failed: ${(error as Error).message}`);
+        }
       }
+      const check = this.raw.prepare("PRAGMA quick_check").get() as { quick_check: string } | undefined;
+      if (check?.quick_check !== "ok") throw new MigrationError(`Database integrity check failed after upgrading: ${check?.quick_check ?? "no result"}`);
+    } catch (error) {
+      if (backup) {
+        this.restore(backup);
+        throw new MigrationError(`${(error as Error).message}. Your data was restored from ${backup} (schema v${start}); this Meadow version can't open it until the problem is fixed.`);
+      }
+      throw error;
     }
   }
 

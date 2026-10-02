@@ -2,12 +2,13 @@ import path from "node:path";
 import { z } from "zod";
 import { getInvestigation, listInvestigations } from "./meadow/atlas/agents";
 import { mcpConfigSnippet } from "./meadow/atlas/mcpServer";
+import { closeExternalClients } from "./meadow/atlas/mcpClient";
 import { atlasStatus, createDemo, evaluate, nodeDetail, pathBetween, startIngest, startInvestigation, systemMap, toolCatalogue } from "./meadow/atlas/service";
 import { listActions, runTool } from "./meadow/atlas/tools";
 import { publicProcedure, router } from "./_core/trpc";
 import { checkRelayUrl } from "./meadow/channels/relay";
 import { telegram, createPairingCode } from "./meadow/channels/telegram";
-import { getSecret, loadConfig, saveConfig, setSecret } from "./meadow/config";
+import { getSecret, loadConfig, meadowHome, saveConfig, setSecret } from "./meadow/config";
 import { decide, listApprovals } from "./meadow/core/approvals";
 import { auditLog, RISK_POLICY } from "./meadow/core/audit";
 import { getDb } from "./meadow/core/db";
@@ -29,6 +30,15 @@ import { bus } from "./meadow/core/events";
 import { indexMemory, indexProject, memoryStatus, reembed, search } from "./meadow/rag/index";
 import { exportBundle, notesFor, phaseDiff, phaseEvidence, planHistory, projectDetail, projectsOverview, usageToday } from "./meadow/service";
 import { captureOnDemand } from "./meadow/visual/ondemand";
+import { checkForUpdate } from "./meadow/core/updates";
+import { analyzeRepository } from "./meadow/setup/analysis";
+import { detectProject, profileLines } from "./meadow/setup/detect";
+import { diagnose, diagnoseAndRepair } from "./meadow/setup/health";
+import { liveGraph } from "./meadow/setup/live";
+import { discoverMcp, EXTERNAL_POLICY, importMcp, mcpCapabilities, removeMcp } from "./meadow/setup/mcp";
+import { buildKnowledge, completeOnboarding, generateInitialPlan, markStep, ONBOARDING_STEPS, onboardingState, registerRepository, resetOnboarding } from "./meadow/setup/onboarding";
+import { scanProviders, useProvider } from "./meadow/setup/providers";
+import { baselineOf, runBaseline } from "./meadow/setup/verify";
 
 const DASHBOARD = { channel: "dashboard", chat: "local" } as const;
 
@@ -37,7 +47,8 @@ const providerSettings = z.object({ baseUrl: z.string().url().max(300), model: z
 
 const configPatch = z.object({
   engine: z.object({ default: z.enum(["cursor", "claude_code", "codex", "gemini", "custom", "fake"]), model: z.string().nullable(), models: z.record(z.string(), z.string().max(120).nullable()), runTimeoutS: z.number().min(60).max(6 * 3600), noOutputTimeoutS: z.number().min(30).max(3600), claudeUseFreeLlmApi: z.boolean() }).partial().optional(),
-  harness: z.object({ maxAttempts: z.number().int().min(1).max(10), checkTimeoutS: z.number().min(10).max(7200), massDeleteThreshold: z.number().int().min(1), phaseGate: z.enum(["auto", "ask"]) }).partial().optional(),
+  harness: z.object({ maxAttempts: z.number().int().min(1).max(10), checkTimeoutS: z.number().min(10).max(7200), massDeleteThreshold: z.number().int().min(1), phaseGate: z.enum(["auto", "ask"]), autoResume: z.boolean(), autoVerify: z.boolean(), preflightImpact: z.boolean() }).partial().optional(),
+  updates: z.object({ check: z.boolean() }).partial().optional(),
   budget: z.object({ phaseTokens: z.number().int().min(1000), dailyTokens: z.number().int().min(1000), phaseWallClockS: z.number().int().min(60) }).partial().optional(),
   telegram: z.object({ mode: z.enum(["hosted", "own"]), relayUrl: z.string().max(300), notificationLevel: z.enum(["all", "phases", "failures"]), quietHours: z.object({ enabled: z.boolean(), start: z.number().int().min(0).max(23), end: z.number().int().min(0).max(23) }), voiceReplies: z.boolean() }).partial().optional(),
   screenshots: z.object({ enabled: z.boolean() }).partial().optional(),
@@ -55,6 +66,7 @@ const configPatch = z.object({
   approvals: z.object({ expiryS: z.number().int().min(60) }).partial().optional(),
   atlas: z.object({
     rerank: z.boolean(),
+    liveUpdate: z.boolean(),
     maxAgentSteps: z.number().int().min(1).max(20),
     connectors: z.object({
       github: z.object({ enabled: z.boolean(), repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/).nullable() }).partial(),
@@ -115,6 +127,83 @@ function safeSettings() {
     engines: engineInfo(),
   };
 }
+
+const setupJobs = new Set<string>();
+/** Runs a long setup step in the background once; progress is read back through onboarding state. */
+function background(key: string, job: () => Promise<void>) {
+  if (setupJobs.has(key)) return { started: false };
+  setupJobs.add(key);
+  void job().finally(() => setupJobs.delete(key));
+  return { started: true };
+}
+
+const setupRouter = router({
+  state: publicProcedure.query(() => {
+    const cwd = process.cwd();
+    const profile = detectProject(cwd);
+    const suggestedPath = (profile.git.repo || profile.markers.length) && !cwd.startsWith(meadowHome()) ? cwd : null;
+    return { ...onboardingState(), order: ONBOARDING_STEPS, running: [...setupJobs], suggestedPath };
+  }),
+  step: publicProcedure.input(z.object({ id: z.enum(ONBOARDING_STEPS), status: z.enum(["pending", "running", "done", "skipped", "failed"]), detail: z.string().max(500).default("") })).mutation(({ input }) => markStep(input.id, input.status, input.detail)),
+  complete: publicProcedure.mutation(() => completeOnboarding()),
+  reset: publicProcedure.mutation(() => resetOnboarding()),
+  detect: publicProcedure.input(z.object({ path: z.string().min(1).max(1000) })).query(({ input }) => {
+    if (!path.isAbsolute(input.path)) throw new Error("Use the full path to the repository.");
+    const profile = detectProject(path.resolve(input.path));
+    return { profile, lines: profileLines(profile) };
+  }),
+  register: publicProcedure.input(z.object({ path: z.string().min(1).max(1000) })).mutation(async ({ input }) => {
+    const result = await registerRepository(input.path);
+    markStep("repository", "done", `${result.project.name} at ${result.project.path}`, result.project.id);
+    return { project: result.project, created: result.created, lines: profileLines(result.profile) };
+  }),
+  providers: publicProcedure.query(() => scanProviders()),
+  useProvider: publicProcedure.input(z.object({ provider: providerId, models: z.array(z.string().max(200)).max(50).default([]) })).mutation(({ input }) => {
+    useProvider(input.provider, input.models);
+    markStep("llm", "done", input.provider);
+    return llmRouting();
+  }),
+  build: publicProcedure.input(z.object({ projectId: z.number() })).mutation(({ input }) => background(`build:${input.projectId}`, async () => {
+    markStep("codeatlas", "running", "Starting");
+    try {
+      const { graph, memory } = await buildKnowledge(input.projectId, (step, detail) => {
+        if (step === "memory") markStep("memory", "running", detail);
+        else markStep("codeatlas", "running", `${step}${detail ? `: ${detail}` : ""}`);
+      });
+      markStep("codeatlas", "done", `${graph.services} services, ${graph.functions} functions, ${graph.apis} APIs, ${graph.tables} tables in ${(graph.ms / 1000).toFixed(1)}s`);
+      markStep("memory", "done", `${memory.files} files, ${memory.chunks} chunks${memory.embedded ? ", embedded locally" : ""}`);
+    } catch (error) {
+      markStep("codeatlas", "failed", (error as Error).message);
+    }
+  })),
+  analysis: publicProcedure.input(z.object({ projectId: z.number() })).query(({ input }) => analyzeRepository(input.projectId)),
+  baseline: publicProcedure.input(z.object({ projectId: z.number() })).query(({ input }) => baselineOf(input.projectId) ?? null),
+  runBaseline: publicProcedure.input(z.object({ projectId: z.number() })).mutation(({ input }) => background(`baseline:${input.projectId}`, async () => {
+    markStep("verify", "running", "Running detected checks");
+    try {
+      const baseline = await runBaseline(input.projectId, result => markStep("verify", "running", `${result.passed ? "✓" : "✗"} ${result.cmd}`));
+      const failed = baseline.results.filter(result => !result.passed).length;
+      markStep("verify", baseline.results.length ? "done" : "skipped", baseline.results.length ? `${baseline.results.length - failed} of ${baseline.results.length} checks pass${failed ? `; ${failed} failing will be enforced once fixed` : ""}` : "No test, lint, typecheck or build commands detected");
+    } catch (error) {
+      markStep("verify", "failed", (error as Error).message);
+    }
+  })),
+  initialPlan: publicProcedure.input(z.object({ projectId: z.number() })).mutation(({ input }) => {
+    const result = generateInitialPlan(input.projectId);
+    markStep("plan", "done", `Plan v${result.version} ready for review`);
+    return result;
+  }),
+  mcp: publicProcedure.input(z.object({ projectId: z.number().nullable() })).query(({ input }) => ({ servers: discoverMcp(input.projectId ? getProject(input.projectId).path : process.cwd()), policy: EXTERNAL_POLICY })),
+  importMcp: publicProcedure.input(z.object({ projectId: z.number().nullable(), name: z.string().min(1).max(80) })).mutation(({ input }) => importMcp(input.projectId ? getProject(input.projectId).path : process.cwd(), input.name)),
+  removeMcp: publicProcedure.input(z.object({ name: z.string().min(1).max(80) })).mutation(async ({ input }) => {
+    removeMcp(input.name);
+    await closeExternalClients();
+  }),
+  mcpCapabilities: publicProcedure.input(z.object({ name: z.string().min(1).max(80) })).query(({ input }) => mcpCapabilities(input.name)),
+  health: publicProcedure.query(() => diagnose()),
+  repair: publicProcedure.mutation(() => diagnoseAndRepair()),
+  updates: publicProcedure.query(() => (loadConfig().updates.check ? checkForUpdate() : { status: "not_configured" as const, current: "" })),
+});
 
 export const appRouter = router({
   overview: publicProcedure.query(() => ({
@@ -179,7 +268,11 @@ export const appRouter = router({
     return { id };
   }),
   search: publicProcedure.input(z.object({ projectId: z.number(), query: z.string().min(1).max(500) })).query(({ input }) => search(input.projectId, input.query, 10)),
-  reindex: publicProcedure.input(z.object({ projectId: z.number() })).mutation(({ input }) => indexProject(input.projectId, getProject(input.projectId).path)),
+  reindex: publicProcedure.input(z.object({ projectId: z.number() })).mutation(async ({ input }) => {
+    const result = await indexProject(input.projectId, getProject(input.projectId).path);
+    await liveGraph.markIndexed(input.projectId).catch(() => undefined);
+    return result;
+  }),
   projectStatus: publicProcedure.input(z.object({ projectId: z.number() })).query(({ input }) => {
     const status = projectStatus(input.projectId);
     return { ...status, briefText: renderBrief(status.brief, 6000), brief: { ...status.brief, spec: "" } };
@@ -246,6 +339,7 @@ export const appRouter = router({
     }),
   }),
   atlas: atlasRouter,
+  setup: setupRouter,
 });
 
 export type AppRouter = typeof appRouter;

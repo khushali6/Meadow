@@ -13,6 +13,7 @@ import { harness } from "../harness/runner";
 import { addNote, approvePlan, getProject, savePlanVersion } from "../projects";
 import { githubRepo } from "./connectors";
 import { changeImpact, nodesForPaths } from "./impact";
+import { callExternalTool, listExternalTools } from "./mcpClient";
 import type { LlmUsage } from "./llm";
 import { nameVariants } from "./parse";
 import { releaseDiff, retrieve, type Strategy } from "./retrieve";
@@ -107,6 +108,9 @@ const EXECUTORS: Record<string, Executor> = {
     await approvePlan(row.id);
     const executionId = await harness.start(project.id, { hint: String(args.description).slice(0, 2000) });
     return `Started execution ${executionId} with plan v${row.version} on ${project.engine}. Progress streams to the dashboard and Telegram.`;
+  },
+  async external_write(args, projectId) {
+    return callExternalTool(String(args.tool), (args.arguments ?? {}) as Record<string, unknown>, { projectId, agent: "approved-action", approved: true });
   },
 };
 
@@ -369,6 +373,20 @@ export const TOOLS: ToolDef[] = [
       const checks = args.checks?.length ? args.checks : detectTestCommands(project.path);
       const plan = fixPlanMarkdown({ projectName: project.name, title: args.title, description: args.description, files: args.files ?? [], checks });
       return gated(ctx, "propose_patch", `Fix with Meadow: ${args.title}`, `Engine: ${project.engine}\nFiles: ${(args.files ?? []).join(", ") || "agent decides"}\nChecks: ${checks.join("; ") || "files changed"}\n\n${args.description.slice(0, 1200)}`, { ...args, plan }, "high");
+    },
+  }),
+  define({
+    name: "call_external_tool", title: "Call an external MCP tool", risk: "HIGH_WRITE",
+    description: "Call a tool from an MCP server configured in Meadow (qualified as server__tool). Read-only tools run immediately; tools that write wait for the owner's approval; destructive tools can't be requested over MCP.",
+    shape: { tool: z.string().regex(/^[A-Za-z0-9_.-]+__[A-Za-z0-9_.-]+$/).max(160), arguments: z.record(z.string(), z.unknown()).optional() },
+    async run(args, ctx) {
+      const known = (await listExternalTools(args.tool.split("__")[0])).find(tool => tool.qualified === args.tool);
+      if (!known) throw new ToolPolicyError("UNKNOWN_TOOL", `No external tool ${args.tool}. Configured MCP servers are listed in Settings → MCP.`);
+      const payload = args.arguments ?? {};
+      if (JSON.stringify(payload).length > 20_000) throw new ToolPolicyError("INVALID_ARGS", "External tool arguments must be under 20 KB.");
+      if (known.readOnly) return { summary: (await callExternalTool(known.qualified, payload, { projectId: ctx.projectId, agent: ctx.actor })).slice(0, 4000), data: null };
+      if (known.risk === "DESTRUCTIVE" && ctx.actor === "mcp") throw new ToolPolicyError("NOT_ALLOWED", `${known.qualified} is destructive and can't be requested over MCP.`);
+      return gated(ctx, "external_write", `${known.risk === "DESTRUCTIVE" ? "Destructive" : "Write"}: ${known.qualified}`, `${known.description || known.tool}\nArguments: ${redact(JSON.stringify(payload)).slice(0, 800)}`, { tool: known.qualified, arguments: payload }, "high");
     },
   }),
   define({

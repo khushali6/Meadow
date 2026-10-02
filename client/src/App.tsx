@@ -1,5 +1,5 @@
 import { Toaster } from "@/components/ui/sonner";
-import { Activity, BookOpen, Gauge, Boxes, Network, Radar, ChevronDown, FileText, FolderGit2, KeyRound, Leaf, Menu, MessageSquarePlus, Moon, Settings2, ShieldCheck, Sun } from "lucide-react";
+import { Activity, AlertTriangle, BookOpen, Wrench, Gauge, Boxes, Network, Radar, ChevronDown, FileText, FolderGit2, KeyRound, Leaf, Menu, MessageSquarePlus, Moon, Settings2, ShieldCheck, Sun } from "lucide-react";
 import { useGSAP } from "@gsap/react";
 import { gsap } from "gsap";
 import { MotionConfig } from "motion/react";
@@ -21,6 +21,8 @@ import { ProjectsView } from "./views/ProjectsView";
 import { RequestView } from "./views/RequestView";
 import { RunView } from "./views/RunView";
 import { SettingsView } from "./views/SettingsView";
+import { WelcomeView } from "./views/WelcomeView";
+import { HEALTH_LABELS } from "./components/settingsParts";
 
 gsap.registerPlugin(useGSAP);
 gsap.defaults({ ease: "power3.out", duration: 0.55 });
@@ -94,6 +96,23 @@ function Dashboard() {
   const detail = trpc.project.useQuery({ id: project?.id ?? 0 }, { enabled: Boolean(project), refetchInterval: 10000 });
   const anyRunning = projects.some(item => item.status === "running");
   const pendingApprovals = overview.data?.approvals.filter(item => item.status === "pending").length ?? 0;
+  const setup = trpc.setup.state.useQuery(undefined, { refetchOnWindowFocus: false });
+  const health = trpc.setup.health.useQuery(undefined, { refetchInterval: 120_000, refetchOnWindowFocus: false });
+  const updates = trpc.setup.updates.useQuery(undefined, { staleTime: 6 * 3600_000, refetchOnWindowFocus: false, retry: false });
+  const repair = trpc.setup.repair.useMutation({
+    onSuccess: result => {
+      utils.setup.health.setData(undefined, result.after);
+      for (const item of result.repairs) (item.ok ? toast.success : toast.error)(item.detail);
+      if (!result.repairs.length) toast.message("Nothing Meadow can repair on its own", { description: result.after.filter(check => !check.ok && !check.skipped).map(check => check.fix ?? check.detail).join(" · ") });
+      void utils.overview.invalidate();
+    },
+  });
+  const problems = (health.data ?? []).filter(check => !check.ok && !check.skipped);
+
+  useEffect(() => {
+    if (setup.data?.needed && location === "/" && !sessionStorage.getItem("meadow-welcome")) navigate("/welcome");
+    if (location === "/welcome") sessionStorage.setItem("meadow-welcome", "1");
+  }, [setup.data?.needed, location]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (project && project.id !== projectId) setProjectId(project.id);
@@ -106,6 +125,20 @@ function Dashboard() {
   const onEvent = useCallback((event: LiveEvent) => {
     if (event.type === "atlas_trace") {
       utils.atlas.investigation.invalidate();
+      return;
+    }
+    if (event.type === "health") {
+      utils.setup.health.invalidate();
+      if (Date.now() - new Date(event.ts).getTime() < 20_000) (event.payload?.ok ? toast.success : toast.warning)(event.title, { description: event.detail.slice(0, 160) });
+      return;
+    }
+    if (event.type === "setup") {
+      utils.setup.state.invalidate();
+      return;
+    }
+    if (event.type === "memory" && event.payload?.live) {
+      utils.atlas.status.invalidate();
+      utils.atlas.map.invalidate();
       return;
     }
     if (event.type === "atlas_ingest") {
@@ -158,7 +191,7 @@ function Dashboard() {
 
   const go = (path: string) => { setMobileNav(false); setSwitcher(false); navigate(path); };
   const openProject = (id: number, path = "/") => { setProjectId(id); go(path); };
-  const current = NAV.find(item => item.key === location) ?? (location === "/settings" ? { label: "Runtime settings" } : { label: "Live console" });
+  const current = NAV.find(item => item.key === location) ?? (location === "/settings" ? { label: "Runtime settings" } : location === "/welcome" ? { label: "Setup" } : { label: "Live console" });
 
   if (overview.isLoading) return <div className="loading-screen"><div className="brand-mark"><Leaf size={20} /></div><span>Connecting to the local Meadow daemon…</span></div>;
   if (overview.error) return <div className="loading-screen"><div className="brand-mark"><Leaf size={20} /></div><span>Can't reach the Meadow daemon: {overview.error.message}</span><MotionButton className="button secondary" onClick={() => overview.refetch()}>Try again</MotionButton></div>;
@@ -211,9 +244,17 @@ function Dashboard() {
             <button className="icon-button" onClick={() => toggleTheme?.()} aria-label="Toggle theme">{theme === "light" ? <Moon size={17} /> : <Sun size={17} />}</button>
           </div>
         </header>
+        {problems.length && location !== "/welcome" ? (
+          <div className="health-banner" role="status">
+            <AlertTriangle size={14} />
+            <span>{problems.map(check => `${HEALTH_LABELS[check.area] ?? check.area}: ${check.detail}`).join(" · ")}</span>
+            <MotionButton className="button secondary" onClick={() => repair.mutate()} disabled={repair.isPending}><Wrench size={13} /> {repair.isPending ? "Repairing…" : problems.some(check => check.repairable) ? "Repair" : "Diagnose"}</MotionButton>
+          </div>
+        ) : null}
+        {updates.data?.status === "available" ? <div className="health-banner update" role="status"><span>Meadow {updates.data.latest} is available (signed). Run <code>meadow update</code> to verify, back up and install it.</span></div> : null}
         <div className="page-wrap" ref={pageRef}>
           {needsProject ? (
-            <EmptyState icon={Boxes} title="No projects yet" body="Describe what you want to build, or create an empty project and write a plan." action={<div className="header-actions"><MotionButton className="button secondary" onClick={() => go("/projects")}>New project</MotionButton><MotionButton className="button primary" onClick={() => go("/request")}>New request</MotionButton></div>} />
+            <EmptyState icon={Boxes} title="No projects yet" body="Point Meadow at a repository and it sets itself up, or describe something new to build." action={<div className="header-actions"><MotionButton className="button primary" onClick={() => go("/welcome")}>Guided setup</MotionButton><MotionButton className="button secondary" onClick={() => go("/request")}>New request</MotionButton></div>} />
           ) : null}
           {location === "/" && project ? (detail.data ? <RunView key={project.id} detail={detail.data} onNavigate={go} /> : <div className="event-empty">Loading {project.name}…</div>) : null}
           {location === "/plans" && project ? (detail.data ? <PlanView key={project.id} detail={detail.data} onNavigate={go} /> : <div className="event-empty">Loading plan…</div>) : null}
@@ -224,8 +265,9 @@ function Dashboard() {
           {location === "/atlas" ? <InvestigateView key={project?.id ?? 0} project={project} onNavigate={go} /> : null}
           {location === "/map" ? <Suspense fallback={<div className="event-empty">Loading the system map…</div>}><SystemMapView key={project?.id ?? 0} project={project} onNavigate={go} /></Suspense> : null}
           {location === "/metrics" ? <Suspense fallback={<div className="event-empty">Loading metrics…</div>}><MetricsView key={project?.id ?? 0} project={project} /></Suspense> : null}
-          {location === "/settings" ? <SettingsView settings={settings.data} overview={overview.data} project={project} /> : null}
-          {!["/", "/plans", "/request", "/projects", "/approvals", "/memory", "/atlas", "/map", "/metrics", "/settings"].includes(location) ? <EmptyState icon={Leaf} title="Page not found" body="That page doesn't exist." action={<MotionButton className="button primary" onClick={() => go("/")}>Back to the live console</MotionButton>} /> : null}
+          {location === "/settings" ? <SettingsView settings={settings.data} overview={overview.data} project={project} onNavigate={go} /> : null}
+          {location === "/welcome" ? <WelcomeView settings={settings.data} overview={overview.data} onNavigate={go} /> : null}
+          {!["/", "/plans", "/request", "/projects", "/approvals", "/memory", "/atlas", "/map", "/metrics", "/settings", "/welcome"].includes(location) ? <EmptyState icon={Leaf} title="Page not found" body="That page doesn't exist." action={<MotionButton className="button primary" onClick={() => go("/")}>Back to the live console</MotionButton>} /> : null}
         </div>
       </main>
     </div>

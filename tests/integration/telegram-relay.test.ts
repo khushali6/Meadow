@@ -162,6 +162,23 @@ describe("one-click Telegram connect through the Meadow relay", () => {
     expect(loadConfig().telegram.ownerId).toBe(42);
   });
 
+  it("reconnects with backoff after a network failure, without pairing again", async () => {
+    const dead = http.createServer();
+    const deadBase = await listen(dead);
+    await new Promise(resolve => dead.close(resolve));
+    telegram.stop();
+    saveConfig({ telegram: { relayUrl: deadBase } });
+    await telegram.start();
+    expect(telegram.status()).toMatchObject({ running: false, paired: true, connection: { state: "reconnecting", nextRetryAt: expect.any(String) } });
+    saveConfig({ telegram: { relayUrl: relayBase } });
+    await waitFor(() => telegram.status().connection.state === "connected", 5000);
+    expect(telegram.status()).toMatchObject({ running: true, paired: true });
+    expect(loadConfig().telegram.ownerId).toBe(42);
+    const before = tg.sent.length;
+    tg.message(42, "/help");
+    await waitFor(() => tg.sent.slice(before).some(item => item.method === "sendMessage" && item.body.chat_id === 42));
+  });
+
   it("disconnects: the relay forgets the device and the owner is cleared", async () => {
     const devicesBefore = relay.devices.size;
     await telegram.disconnect();

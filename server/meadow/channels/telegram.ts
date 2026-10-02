@@ -47,9 +47,19 @@ function consumePairingCode(text: string): boolean {
   return ok;
 }
 
+/** Reconnect delays in seconds; each gets ±30% jitter so many installs don't retry in lockstep. */
+export const RECONNECT_STEPS = [1, 2, 5, 10, 30, 60];
+export const backoffMs = (failures: number, random = Math.random) => {
+  const step = RECONNECT_STEPS[Math.min(failures, RECONNECT_STEPS.length - 1)] * 1000;
+  return Math.round(step * (0.7 + random() * 0.6));
+};
+
 export class TelegramChannel {
   api: TelegramApi | null = null;
   private running = false;
+  private failures = 0;
+  private retryTimer: NodeJS.Timeout | null = null;
+  connection: { state: "connected" | "reconnecting" | "offline"; since: string; nextRetryAt: string | null } = { state: "offline", since: new Date().toISOString(), nextRetryAt: null };
   private generation = 0;
   private botName: string | null = null;
   lastError: string | null = null;
@@ -67,7 +77,7 @@ export class TelegramChannel {
   status() {
     const config = loadConfig().telegram;
     const credentials = this.credentials();
-    return { configured: Boolean(credentials), mode: credentials?.mode ?? config.mode, hostedAvailable: Boolean(relayUrl()), relayUrl: config.relayUrl, running: this.running, bot: this.botName, paired: config.ownerId !== null, pairingPending: Boolean(setting("telegram_pairing")), lastError: this.lastError };
+    return { configured: Boolean(credentials), mode: credentials?.mode ?? config.mode, hostedAvailable: Boolean(relayUrl()), relayUrl: config.relayUrl, running: this.running, connection: this.connection, bot: this.botName, paired: config.ownerId !== null, pairingPending: Boolean(setting("telegram_pairing")), lastError: this.lastError };
   }
 
   /** One-click connect to the hosted bot: returns the t.me link the user opens; tapping Start pairs them. */
@@ -94,19 +104,36 @@ export class TelegramChannel {
 
   private offsetKey = "telegram_offset";
 
+  private setConnection(state: "connected" | "reconnecting" | "offline", retryInMs: number | null = null) {
+    if (this.connection.state !== state || retryInMs !== null) this.connection = { state, since: this.connection.state === state ? this.connection.since : new Date().toISOString(), nextRetryAt: retryInMs === null ? null : new Date(Date.now() + retryInMs).toISOString() };
+  }
+
   async start() {
     const credentials = this.credentials();
     if (!credentials || this.running) return;
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = null;
     registerSecret(credentials.token);
     this.api = new TelegramApi(credentials.token, credentials.base);
     this.offsetKey = credentials.mode === "hosted" ? "telegram_offset_hosted" : "telegram_offset";
     try {
       this.botName = (await this.api.getMe()).username;
     } catch (error) {
-      this.lastError = credentials.mode === "hosted" ? `Meadow bot relay unavailable: ${redact((error as Error).message)}` : `Telegram token rejected: ${(error as Error).message}`;
-      console.warn(`[meadow] ${this.lastError}`);
+      this.lastError = credentials.mode === "hosted" ? `Meadow bot relay unavailable: ${redact((error as Error).message)}` : `Telegram unavailable: ${redact((error as Error).message)}`;
+      const rejected = /401|Unauthorized|Not Found|404/.test((error as Error).message);
+      if (rejected) {
+        console.warn(`[meadow] ${this.lastError}`);
+        this.setConnection("offline");
+        return;
+      }
+      const wait = backoffMs(this.failures++);
+      this.setConnection("reconnecting", wait);
+      this.retryTimer = setTimeout(() => void this.start(), wait);
+      this.retryTimer.unref?.();
       return;
     }
+    this.failures = 0;
+    this.setConnection("connected");
     this.running = true;
     console.log(`[meadow] Telegram bot @${this.botName} connected (${credentials.mode === "hosted" ? "Meadow relay" : "long polling"})`);
     void this.poll(++this.generation);
@@ -115,6 +142,19 @@ export class TelegramChannel {
   stop() {
     this.running = false;
     this.generation += 1;
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = null;
+    this.setConnection("offline");
+  }
+
+  /** Self-repair hook: restart the channel if it should be connected but isn't. */
+  async repair(): Promise<boolean> {
+    if (!this.credentials()) return false;
+    if (this.running && this.connection.state === "connected") return true;
+    this.stop();
+    this.failures = 0;
+    await this.start();
+    return this.running;
   }
 
   private async poll(generation: number) {
@@ -123,6 +163,8 @@ export class TelegramChannel {
       try {
         const updates = await this.api.getUpdates(offset);
         this.lastError = null;
+        this.failures = 0;
+        this.setConnection("connected");
         if (generation !== this.generation) return;
         for (const update of updates) {
           offset = update.update_id + 1;
@@ -131,7 +173,9 @@ export class TelegramChannel {
         }
       } catch (error) {
         this.lastError = redact((error as Error).message);
-        await new Promise(resolve => setTimeout(resolve, 5000));
+        const wait = backoffMs(this.failures++);
+        this.setConnection("reconnecting", wait);
+        await new Promise(resolve => setTimeout(resolve, wait));
       }
     }
   }

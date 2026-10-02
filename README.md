@@ -35,12 +35,12 @@ The agent's own thinking (clarifying questions, specs, plans, summaries) uses th
 ```bash
 pnpm install
 pnpm build
-node dist/cli.js init      # agent provider and key, default engine, optional Telegram pairing
-node dist/cli.js doctor    # checks everything and says how to fix what's missing
-node dist/cli.js start     # prints http://127.0.0.1:7777/?token=…
+cd ~/code/your-repo
+node /path/to/meadow/dist/cli.js init    # detects the repo and model servers, builds the graph, runs checks, drafts a plan
+node /path/to/meadow/dist/cli.js start   # prints http://127.0.0.1:7777/?token=…
 ```
 
-Open the printed link. The token in the URL is your dashboard session; it changes every time Meadow starts.
+Open the printed link. The token in the URL is your dashboard session; it changes every time Meadow starts. On first launch with no projects, the dashboard opens **Setup**, which does the same as `init` step by step in the browser. The whole path is: install, open a project, connect Telegram, approve the plan.
 
 To link the command globally: `pnpm link --global`, then use `meadow …`.
 
@@ -61,7 +61,8 @@ MEADOW_ENGINE=fake meadow run examples/DEMO-PLAN.md
 
 | Command | What it does |
 | --- | --- |
-| `meadow init` | Guided setup |
+| `meadow init` | Guided setup: detects the current repo and model providers, registers the project, builds CodeAtlas and memory, runs the baseline checks, drafts a first plan |
+| `meadow update [--yes]` | Checks for a signed update, verifies signature and checksum, backs up the database, installs |
 | `meadow doctor` | Checks Node, git, the agent provider, memory, engines, Playwright, Telegram, voice |
 | `meadow start [--port N]` | Starts the daemon: dashboard, Telegram, recovery of interrupted runs |
 | `meadow run <PLAN.md> [--engine E] [--project P]` | Runs a plan from the terminal |
@@ -77,6 +78,33 @@ MEADOW_ENGINE=fake meadow run examples/DEMO-PLAN.md
 | `meadow mcp [--project P]` | Runs the CodeAtlas MCP server over stdio |
 
 In Telegram (and in the dashboard's Request page) you can also use `/new`, `/projects`, `/project`, `/plan`, `/status`, `/phase`, `/pause`, `/resume`, `/stop`, `/retry`, `/skip`, `/rollback`, `/logs`, `/engine`, `/next`, `/ask`, `/remember`, `/index`, `/notify`, `/budget`, `/shot`, `/investigate` (also `/why`) and `/help`.
+
+## Automatic setup and self-maintenance
+
+Meadow sets itself up from what is already in the repository and keeps itself working without supervision. It never executes a plan, a write tool or a destructive action without your approval.
+
+**Setup** (dashboard on first launch, or `meadow init` in a repo):
+
+1. **Detect the project.** Reads `package.json`, `pyproject.toml`, `requirements.txt`, `go.mod`, `Cargo.toml`, `Dockerfile`, Compose files, `.git`, `.github/workflows`, editor MCP configs and the *key names* in `.env.example`, and infers languages, frameworks, package manager, test framework, build, CI, databases and the typecheck, lint, test and build commands. `.env` is never read.
+2. **Pick a model.** Probes `localhost:3001` (FreeLLMAPI), `:11434` (Ollama) and `:1234` (LM Studio), checks agent keys, and recommends one. Engine keys (`OPENAI_API_KEY` and friends) are reported but never borrowed for the agent.
+3. **Build knowledge.** Builds the CodeAtlas graph and the local memory index, with progress.
+4. **Connect tools.** Lists MCP servers from `.mcp.json`, `.cursor/mcp.json` and `.vscode/mcp.json`. **Connect** copies the command; secret *values* are never copied, only names of secrets Meadow manages.
+5. **Connect Telegram** with one click (below).
+6. **Learn what "working" means.** Runs the detected commands once as a baseline. Commands that pass are then enforced after every phase; ones that already fail don't block agents until fixed.
+7. **Draft a first plan** from the analysis: services ranked by callers, APIs and tables; hotspots; services without tests; tables written by several services; TODO/FIXME debt; past incidents. Every phase gets a check that fails today and passes when the work is done. The plan is a draft until you approve it.
+
+**While running:**
+
+- **Live graph.** Every 20 s Meadow compares git HEAD and the working tree with the last indexed state, re-chunks the changed files and rebuilds the graph in one transaction (debounced to once every 30 s, skipped while a run is active on that project).
+- **Impact before changes.** Before each phase, the services, APIs, tables, owners and incidents the phase is likely to touch go into the engine's context and the event log.
+- **Next step.** When a run completes, Meadow suggests the next action (for example, plan the next phases). Executing it still needs your approval.
+- **Self-check and repair.** Every two minutes Meadow checks the database, memory, CodeAtlas, the agent model, MCP servers and Telegram. It reconnects Telegram and MCP servers and re-embeds stale memory on its own, and tells you only when something changed. **Settings → Health and data → Diagnose and repair** runs it on demand; a banner appears when something needs you.
+- **Telegram reconnects** after network failures with backoff (1 s, 2 s, 5 s, 10 s, 30 s, 60 s, with jitter), without pairing again. Settings shows *Reconnecting…* and the next retry time.
+- **Crash recovery.** Interrupted runs are marked at startup. With **Resume interrupted runs on restart** on (off by default), they continue from the last verified phase.
+- **Safe upgrades.** Before a schema migration, the database is copied to `~/.meadow/backups/` (the newest five are kept). Each migration runs in a transaction, an integrity check runs afterwards, and on any failure the backup is restored and Meadow refuses to start with a clear message.
+- **Signed updates.** `meadow update` and the dashboard banner trust only a release manifest signed (Ed25519) by the publisher key built into Meadow, download over HTTPS, verify the SHA-256, back up the database and install with npm. Migrations and `meadow doctor` run on the next start.
+
+All of these can be switched off in **Settings → Automation**.
 
 ## Connect Telegram
 
@@ -209,7 +237,9 @@ Every CodeAtlas and MCP tool has a risk level, enforced on the server:
 | `HIGH_WRITE` | `run_tests`, `propose_patch` | Needs approval (high) |
 | `DESTRUCTIVE` | none exposed today | Needs approval; never callable over MCP |
 
-Tool arguments are validated strictly (unknown fields are rejected, file paths must stay inside the project). External MCP tools are offered to agents only if they declare themselves read-only.
+Tool arguments are validated strictly (unknown fields are rejected, file paths must stay inside the project).
+
+Tools from external MCP servers are classified when listed: **READ** if the server marks them read-only, **DESTRUCTIVE** if they are marked destructive or their name says delete, remove, drop, merge, force, purge, reset, revoke and similar (this wins over a read-only claim), otherwise **WRITE**. Read tools run automatically; write tools go through the same approval queue as Meadow's own; destructive tools always need approval and are refused when requested by an MCP client.
 
 Every tool call, including refused ones and approval outcomes, is written to the **audit log** (Policy gates page): time, agent, tool, risk, user, a hash of the arguments, the approval outcome, the result and the duration. Arguments themselves are never stored, and details are redacted.
 
@@ -273,6 +303,7 @@ Settings live in `~/.meadow/config.json` and are editable from the dashboard's S
 | `MEADOW_ENGINE` | Default engine: `cursor`, `codex`, `gemini`, `custom` or `fake` (`claude_code` is coming soon) |
 | `MEADOW_CURSOR_BIN` / `MEADOW_CLAUDE_BIN` / `MEADOW_CODEX_BIN` / `MEADOW_GEMINI_BIN` | Engine binary paths if not on `PATH` |
 | `MEADOW_RELAY_URL` | Telegram relay for the shared Meadow bot (defaults to the built-in one) |
+| `MEADOW_UPDATE_URL` | HTTPS URL of the signed release manifest (empty: update checks are off) |
 | `MEADOW_PIPER_MODEL` | Piper voice model for spoken replies |
 | `GITHUB_TOKEN` / `JIRA_API_TOKEN` / `LINEAR_API_KEY` | CodeAtlas connectors, used only when enabled in Settings → CodeAtlas |
 | `MEADOW_ATLAS_NO_LLM=1` | Force CodeAtlas to its rule-based planner and writer |
@@ -307,6 +338,10 @@ See [SECURITY.md](SECURITY.md) for the full model and how to report issues.
 - The Codex and Gemini adapters follow those CLIs' documented JSON output but haven't been run against every version; `meadow doctor` shows what was detected.
 - One engine run at a time across all projects.
 - The local embedding is a hashed bag of words and word pairs. It finds lexical and near-lexical matches well but has no real semantic understanding; configure a local embedding model (for example `nomic-embed-text` in Ollama) for better recall.
+- The live graph re-chunks changed files individually, but the knowledge graph itself is rebuilt in full (inside one transaction) rather than patched per file. On very large repositories that rebuild takes longer; it is debounced and skipped while a run is active.
+- The first plan is generated from the graph and the baseline with fixed rules, not by a model, so it is predictable but generic. Edit it, or use **Plan next steps** with a model for something more tailored.
+- Signed updates need the maintainer to publish signed manifests and set the publisher key and `MEADOW_UPDATE_URL`. Until then, update checks say "not configured" and you upgrade with your package manager. Installing replaces the global npm package; it doesn't swap binaries in place.
+- Self-repair can reconnect and re-index, but it can't fix a wrong API key, a stopped model server or a corrupted database; it tells you what to do instead.
 - Change impact follows the edges CodeAtlas extracted. Calls made through dynamic dispatch, reflection or configuration it couldn't parse won't appear.
 - Screenshots need Playwright; without it, web phases still pass on their checks but have no images.
 - The CLI flags of `cursor-agent` and `claude` change between versions. Meadow detects them from `--help` and ignores unknown output, but a major CLI change can still need an adapter update. `meadow doctor` shows what was detected.

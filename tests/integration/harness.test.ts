@@ -194,7 +194,7 @@ describe("harness with the fake engine", () => {
     const project = await setup();
     const plan = getDb().get<{ id: number }>("SELECT id FROM plans WHERE project_id = ? AND status = 'approved'", project.id)!;
     getDb().insert("executions", { project_id: project.id, plan_id: plan.id, status: "running", engine: "fake", tokens: 0, cost_usd: 0, started_at: new Date().toISOString() });
-    expect(harness.recoverOnStartup()).toBe(1);
+    expect(harness.recoverOnStartup()).toHaveLength(1);
     expect(harness.latestExecution(project.id)?.status).toBe("interrupted");
     const done = settled(project.id);
     await harness.start(project.id);

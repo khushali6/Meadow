@@ -6,7 +6,21 @@ import { audit } from "../core/audit";
 import { redact, registerSecret } from "../core/redact";
 
 /** External tools are offered to agents only when the server marks them read-only; anything else needs a human. */
-export type ExternalTool = { qualified: string; server: string; tool: string; description: string; readOnly: boolean };
+export type ExternalRisk = "READ" | "WRITE" | "DESTRUCTIVE";
+export type ExternalTool = { qualified: string; server: string; tool: string; description: string; readOnly: boolean; risk: ExternalRisk };
+
+const DESTRUCTIVE_NAME = /(^|_|-)(delete|remove|drop|destroy|merge|force|purge|truncate|reset|wipe|revoke)(_|-|$)/i;
+
+/**
+ * An explicit destructiveHint or a destructive-sounding name is DESTRUCTIVE, whatever else the server claims
+ * (annotations come from the server and are only hints). READ needs readOnlyHint. Everything else is WRITE.
+ * (The MCP spec defaults destructiveHint to true for any non-read-only tool, so absent annotations are at least WRITE.)
+ */
+export function classifyExternal(name: string, annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean }): ExternalRisk {
+  if (annotations?.destructiveHint === true || DESTRUCTIVE_NAME.test(name)) return "DESTRUCTIVE";
+  if (annotations?.readOnlyHint === true) return "READ";
+  return "WRITE";
+}
 
 const clients = new Map<string, Promise<Client>>();
 const CALL_TIMEOUT_MS = 60_000;
@@ -35,13 +49,16 @@ function connect(name: string): Promise<Client> {
   return promise;
 }
 
-export async function listExternalTools(): Promise<ExternalTool[]> {
+export async function listExternalTools(only?: string): Promise<ExternalTool[]> {
   const out: ExternalTool[] = [];
-  for (const server of loadConfig().atlas.mcpServers) {
+  for (const server of loadConfig().atlas.mcpServers.filter(entry => !only || entry.name === only)) {
     try {
       const client = await connect(server.name);
       const { tools } = await client.listTools();
-      for (const tool of tools) out.push({ qualified: `${server.name}__${tool.name}`, server: server.name, tool: tool.name, description: (tool.description ?? "").slice(0, 300), readOnly: tool.annotations?.readOnlyHint === true && tool.annotations?.destructiveHint !== true });
+      for (const tool of tools) {
+        const risk = classifyExternal(tool.name, tool.annotations);
+        out.push({ qualified: `${server.name}__${tool.name}`, server: server.name, tool: tool.name, description: (tool.description ?? "").slice(0, 300), readOnly: risk === "READ", risk });
+      }
     } catch {
       // An unreachable server just contributes no tools.
     }
@@ -49,11 +66,12 @@ export async function listExternalTools(): Promise<ExternalTool[]> {
   return out;
 }
 
-export async function callExternalTool(qualified: string, args: Record<string, unknown>, ctx: { projectId: number; agent: string }): Promise<string> {
+/** `approved` is set only by the daemon's action executor after the owner approved this exact call. */
+export async function callExternalTool(qualified: string, args: Record<string, unknown>, ctx: { projectId: number; agent: string; approved?: boolean }): Promise<string> {
   const started = Date.now();
   const known = (await listExternalTools()).find(tool => tool.qualified === qualified);
   const base = { projectId: ctx.projectId, agent: ctx.agent, user: "local-owner", tool: qualified, args };
-  if (!known || !known.readOnly) {
+  if (!known || (!known.readOnly && !ctx.approved)) {
     audit({ ...base, risk: "HIGH_WRITE", approval: "refused", result: "refused", durationMs: 0, detail: known ? "external tool is not read-only" : "unknown external tool" });
     throw new Error(known ? `${qualified} is not marked read-only by its server, so agents can't call it automatically.` : `Unknown external tool ${qualified}`);
   }
@@ -66,7 +84,7 @@ export async function callExternalTool(qualified: string, args: Record<string, u
     const result = await client.callTool({ name: known.tool, arguments: args }, undefined, { timeout: CALL_TIMEOUT_MS });
     const content = Array.isArray(result.content) ? result.content : [];
     const text = content.map(part => (part && typeof part === "object" && "text" in part ? String(part.text) : "")).join("\n");
-    audit({ ...base, risk: "READ", approval: "not_required", result: result.isError ? "error" : "ok", durationMs: Date.now() - started });
+    audit({ ...base, risk: known.readOnly ? "READ" : known.risk === "DESTRUCTIVE" ? "DESTRUCTIVE" : "HIGH_WRITE", approval: known.readOnly ? "not_required" : "approved", result: result.isError ? "error" : "ok", durationMs: Date.now() - started });
     return redact(text).slice(0, 8000);
   } catch (error) {
     audit({ ...base, risk: "READ", approval: "not_required", result: "error", durationMs: Date.now() - started, detail: (error as Error).message });

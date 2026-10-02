@@ -13,10 +13,23 @@ import { indexMemory, indexProject, promptContext } from "../rag/index";
 import { captureRoutes } from "../visual/capture";
 import { startPreview, type PreviewHandle } from "../visual/preview";
 import { projectBrief } from "../brief/brief";
+import { projectStatus } from "../brief/next";
+import { liveGraph } from "../setup/live";
+import { preflightImpact } from "../setup/preflight";
+import { autoChecks } from "../setup/verify";
 import { runGuards } from "./guards";
 import { compileFixPrompt, compilePhasePrompt, rulesFileContent } from "./prompts";
 import { summarizePhase } from "./summarize";
 import { verify, type CheckOutcome } from "./verifier";
+
+function nextRecommendation(projectId: number): string | null {
+  try {
+    const next = projectStatus(projectId).suggestions[0];
+    return next ? `Recommended next: ${next.label}. ${next.detail}` : null;
+  } catch {
+    return null;
+  }
+}
 
 /** Backoff between engine rate-limit retries, in seconds. MEADOW_RATE_LIMIT_WAITS overrides it (comma-separated). */
 function rateLimitWaits(): number[] {
@@ -89,7 +102,19 @@ export class Harness {
       db.run("UPDATE runs SET status = 'interrupted', finished_at = ? WHERE execution_id = ? AND status = 'running'", now(), execution.id);
       bus.emitEvent({ type: "control", projectId: execution.project_id, executionId: execution.id, title: "Run interrupted", detail: "Meadow restarted while this run was active. Resume to continue from the last verified state.", payload: { status: "interrupted" } });
     }
-    return stale.length;
+    return stale.map(execution => execution.project_id);
+  }
+
+  /** With harness.autoResume on, interrupted runs continue on their own after a restart (verified state only). */
+  autoResume(projectIds: number[]) {
+    if (!loadConfig().harness.autoResume) return [];
+    const resumed: number[] = [];
+    for (const projectId of [...new Set(projectIds)]) {
+      this.start(projectId).then(() => resumed.push(projectId)).catch(error => {
+        bus.emitEvent({ type: "control", projectId, title: "Auto-resume skipped", detail: (error as Error).message, payload: { status: "interrupted" } });
+      });
+    }
+    return resumed;
   }
 
   /** Start a new execution, or resume the latest paused/blocked/interrupted/waiting one. */
@@ -227,7 +252,7 @@ export class Harness {
         return this.park(state, null, "waiting", "Phase passed. Waiting for you to continue.");
       }
     }
-    this.finish(state, "completed", null);
+    this.finish(state, "completed", nextRecommendation(project.id));
   }
 
   private park(state: Active, phase: PhaseRow | null, status: "paused" | "waiting" | "blocked", note: string) {
@@ -368,6 +393,19 @@ export class Harness {
     let rateLimitHits = 0;
     let guardFeedback = "";
     let engineReport = "";
+    let impactText = "";
+    if (config.harness.preflightImpact) {
+      try {
+        const impact = preflightImpact(project.id, phase);
+        if (impact) {
+          impactText = impact.text;
+          this.emit(state, "impact", `Impact of ${phase.name}: ${impact.report.impacted.length} affected (${impact.report.risk} risk)`, impact.report.reasons.join("; ") || "No dependents", { phaseId: row.id, payload: { risk: impact.report.risk, services: impact.report.services, apis: impact.report.apis.length, tables: impact.report.tables, tests: impact.report.tests.length, affected: impact.report.impacted.length } });
+        }
+      } catch {
+        // No graph yet: the phase runs without an impact section.
+      }
+    }
+    const extraChecks = autoChecks(project.id, phase.checks);
     let preview: PreviewHandle | null = null;
     const needsPreview = Boolean(plan.preview && phase.checks.some(check => check.kind === "http"));
 
@@ -393,7 +431,7 @@ export class Harness {
         if (!skipEngine) {
           attemptsThisRun += 1;
           this.setPhase(row, { status: lastFailure || guardFeedback ? "fixing" : "running", attempts: row.attempts + 1 });
-          const context = await promptContext(project.id, project.path, `${phase.name} ${phase.tasks.join(" ")}`);
+          const context = [impactText, await promptContext(project.id, project.path, `${phase.name} ${phase.tasks.join(" ")}`)].filter(Boolean).join("\n\n");
           const brief = projectBrief(project.id, lastFailure ? 2500 : 6000, phase.id);
           const prompt = lastFailure
             ? compileFixPrompt({ plan, phase, projectPath: project.path, failing: { check: lastFailure.check, exitCode: lastFailure.exitCode, output: lastFailure.output }, hint: state.hint ?? undefined, guardFeedback, brief, attempt: { n: attemptsThisRun, max: config.harness.maxAttempts } })
@@ -453,7 +491,7 @@ export class Harness {
             this.emit(state, "error", "Preview server did not start", tail((error as Error).message, 30), { phaseId: row.id });
           }
         }
-        const outcomes = await verify(phase.checks, {
+        const outcomes = await verify([...phase.checks, ...extraChecks], {
           cwd: project.path,
           previewUrl: preview?.url ?? null,
           phaseId: row.id,
@@ -538,7 +576,10 @@ export class Harness {
       payload: { phaseNumber, total, checks: outcomes.map(outcome => outcome.label), files: diff.length, additions, deletions, dependencyChanges, screenshotIds: shotIds, commit: sha.slice(0, 10) },
     });
     indexMemory(project.id, `phase ${phase.id} summary`, `${phase.name}: ${summary}`).catch(() => undefined);
-    indexProject(project.id, project.path).catch(() => undefined);
+    liveGraph
+      .refresh(project.id, `phase ${phase.id} passed`, { forceGraph: true })
+      .then(update => (update ? undefined : indexProject(project.id, project.path).then(() => liveGraph.markIndexed(project.id))))
+      .catch(() => undefined);
   }
 
   async shutdown() {

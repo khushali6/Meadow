@@ -1,56 +1,11 @@
-import { CheckCircle2, Download, KeyRound, Loader2, MessageCircle, RefreshCw, Stethoscope, XCircle } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
-import { toast } from "sonner";
+import { CheckCircle2, Download, Loader2, Plug, Stethoscope, Wrench, XCircle } from "lucide-react";
+import { useState } from "react";
 import { ErrorNote, PageHeader, Toggle } from "../components/common";
+import { HEALTH_LABELS, NumberInput, Row, Section, SecretField, TelegramConnect, type Patch, type SecretName } from "../components/settingsParts";
 import { downloadJson } from "../lib/api";
 import { trpc } from "../lib/trpc";
 import type { Overview, ProjectSummary, Settings } from "../lib/types";
 import { MotionButton } from "../components/animation/motion";
-
-type Patch = Parameters<ReturnType<typeof trpc.updateSettings.useMutation>["mutate"]>[0];
-
-function Section({ title, description, children }: { title: string; description: string; children: ReactNode }) {
-  return (
-    <section className="panel settings-section">
-      <div className="settings-section-head"><div><h2>{title}</h2><p>{description}</p></div></div>
-      {children}
-    </section>
-  );
-}
-
-function Row({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
-  return <div className="setting-control"><div><strong>{label}</strong>{hint ? <span>{hint}</span> : null}</div><div className="setting-inline">{children}</div></div>;
-}
-
-function NumberInput({ value, onCommit, min, step = 1, suffix }: { value: number; onCommit: (value: number) => void; min?: number; step?: number; suffix?: string }) {
-  const [draft, setDraft] = useState(String(value));
-  return (
-    <span className="number-input">
-      <input type="number" value={draft} min={min} step={step} onChange={event => setDraft(event.target.value)} onBlur={() => { const parsed = Number(draft); if (Number.isFinite(parsed) && parsed !== value) onCommit(parsed); else setDraft(String(value)); }} />
-      {suffix ? <em>{suffix}</em> : null}
-    </span>
-  );
-}
-
-type SecretName = Parameters<ReturnType<typeof trpc.setSecret.useMutation>["mutate"]>[0]["name"];
-
-function SecretField({ name, present, label, placeholder }: { name: SecretName; present: boolean; label: string; placeholder: string }) {
-  const utils = trpc.useUtils();
-  const [value, setValue] = useState("");
-  const save = trpc.setSecret.useMutation({ onSuccess: () => { setValue(""); utils.settings.invalidate(); utils.llmStatus.invalidate(); utils.llm.providers.invalidate(); utils.overview.invalidate(); utils.doctor.invalidate(); utils.atlas.status.invalidate(); } });
-  return (
-    <div className="secret-field">
-      <Row label={label} hint={present ? "Stored in ~/.meadow/secrets.env (owner-only file). Never shown again." : "Not set"}>
-        <span className={`status-tag ${present ? "passed" : "blocked"}`}>{present ? <CheckCircle2 size={10} /> : <XCircle size={10} />}{present ? "Set" : "Missing"}</span>
-      </Row>
-      <form className="search-row" onSubmit={event => { event.preventDefault(); save.mutate({ name, value }); }}>
-        <input type="password" autoComplete="off" value={value} onChange={event => setValue(event.target.value)} placeholder={placeholder} aria-label={label} />
-        <MotionButton className="button secondary" disabled={value.trim().length < 8 || save.isPending}><KeyRound size={14} /> {present ? "Replace" : "Save"}</MotionButton>
-      </form>
-      <ErrorNote error={save.error} />
-    </div>
-  );
-}
 
 type ProviderId = NonNullable<NonNullable<Patch["llm"]>["provider"]>;
 const CAPABILITY_LABELS = [["chat", "Chat"], ["jsonMode", "JSON mode"], ["streaming", "Streaming"], ["embeddings", "Embeddings"], ["transcription", "Voice"]] as const;
@@ -147,104 +102,71 @@ function AgentModelSection({ patch }: { patch: (value: Patch) => void }) {
   );
 }
 
-type TelegramStatus = NonNullable<Overview>["telegram"];
-
-function TelegramConnect({ tg, config, hasOwnToken, patch }: { tg: TelegramStatus | undefined; config: Settings["config"]; hasOwnToken: boolean; patch: (value: Patch) => void }) {
+function McpSection({ project }: { project: ProjectSummary | undefined }) {
   const utils = trpc.useUtils();
-  const [link, setLink] = useState<{ link: string; bot: string; expiresAt: string } | null>(null);
-  const [advanced, setAdvanced] = useState(config.telegram.mode === "own");
-  const refresh = () => { void utils.overview.invalidate(); void utils.settings.invalidate(); };
-  const connect = trpc.connectTelegram.useMutation({ onSuccess: data => { setLink(data); refresh(); } });
-  const disconnect = trpc.disconnectTelegram.useMutation({ onSuccess: () => { setLink(null); refresh(); } });
-  const pair = trpc.pairTelegram.useMutation();
-  const own = tg?.mode === "own";
-  const waiting = Boolean(link) && !tg?.paired;
-
-  useEffect(() => {
-    if (!waiting) return;
-    const timer = setInterval(() => void utils.overview.invalidate(), 2000);
-    return () => clearInterval(timer);
-  }, [waiting, utils]);
-  useEffect(() => {
-    if (link && tg?.paired) {
-      setLink(null);
-      toast.success(`Telegram connected${tg.bot ? ` to @${tg.bot}` : ""}`);
-    }
-  }, [link, tg?.paired, tg?.bot]);
-
-  const startConnect = () => {
-    const tab = window.open("about:blank", "_blank");
-    connect.mutate(undefined, {
-      onSuccess: data => {
-        if (!tab) return;
-        tab.opener = null;
-        tab.location.href = data.link;
-      },
-      onError: () => tab?.close(),
-    });
-  };
-
-  const state = tg?.paired ? "Connected" : tg?.running ? "Waiting for you in Telegram" : tg?.configured ? "Not running" : "Not connected";
+  const found = trpc.setup.mcp.useQuery({ projectId: project?.id ?? null }, { refetchOnWindowFocus: false });
+  const [inspect, setInspect] = useState<string | null>(null);
+  const caps = trpc.setup.mcpCapabilities.useQuery({ name: inspect ?? "" }, { enabled: Boolean(inspect), retry: false });
+  const done = () => { void found.refetch(); void utils.settings.invalidate(); void utils.setup.health.invalidate(); };
+  const add = trpc.setup.importMcp.useMutation({ onSuccess: done });
+  const remove = trpc.setup.removeMcp.useMutation({ onSuccess: done });
   return (
-    <>
-      <Row label="Status" hint={tg?.lastError ?? (tg?.bot ? `@${tg.bot}${own ? " (your bot)" : ""}` : undefined)}>
-        <span className={`status-tag ${tg?.paired && tg.running ? "passed" : "queued"}`}><MessageCircle size={10} />{state}</span>
-      </Row>
-      {!own ? (
-        tg?.paired ? (
-          <Row label="Meadow bot" hint="Messages from your account reach only this computer.">
-            <MotionButton className="button secondary" onClick={() => disconnect.mutate()} disabled={disconnect.isPending}>Disconnect</MotionButton>
-          </Row>
-        ) : tg?.hostedAvailable ? (
-          <Row label="Connect" hint="Opens Telegram. Tap Start and you're connected; no bot or token to set up.">
-            <MotionButton className="button" onClick={startConnect} disabled={connect.isPending}>{connect.isPending ? "Opening Telegram…" : link ? "New link" : "Connect Telegram"}</MotionButton>
-          </Row>
-        ) : (
-          <Row label="Meadow bot" hint="This build has no hosted bot configured. Set the relay URL under Advanced, or use your own bot.">
-            <span className="status-tag queued"><span />Unavailable</span>
-          </Row>
-        )
-      ) : (
-        <Row label="Your bot" hint={tg?.paired ? "Paired with your account." : "Send the pairing code to your bot within 15 minutes."}>
-          {tg?.paired ? <MotionButton className="button secondary" onClick={() => disconnect.mutate()} disabled={disconnect.isPending}>Unpair</MotionButton> : <MotionButton className="button secondary" onClick={() => pair.mutate()} disabled={pair.isPending || !hasOwnToken}>New pairing code</MotionButton>}
+    <Section title="MCP servers" description={`Servers found in ${project ? `${project.name}'s` : "this project's"} editor configs. Read tools run automatically, write tools wait for your approval, destructive tools always do and are never offered to MCP clients.`}>
+      {found.data ? <div className="policy-strip">{Object.entries(found.data.policy).map(([risk, rule]) => <span key={risk}><b>{risk}</b>{rule}</span>)}</div> : null}
+      {(found.data?.servers ?? []).map(server => (
+        <Row key={server.name} label={server.service ? `${server.service} (${server.name})` : server.name} hint={`${server.source} · ${server.transport}${server.missingSecrets.length ? ` · needs ${server.missingSecrets.join(", ")} in its own environment` : ""}`}>
+          {server.imported ? (
+            <>
+              <MotionButton className="button secondary" onClick={() => setInspect(inspect === server.name ? null : server.name)}>Tools</MotionButton>
+              <MotionButton className="button secondary" onClick={() => remove.mutate({ name: server.name })} disabled={remove.isPending}>Remove</MotionButton>
+            </>
+          ) : <MotionButton className="button secondary" onClick={() => add.mutate({ projectId: project?.id ?? null, name: server.name })} disabled={add.isPending || server.transport !== "stdio"}><Plug size={13} /> {server.transport === "stdio" ? "Connect" : "HTTP not supported"}</MotionButton>}
         </Row>
-      )}
-      <ErrorNote error={connect.error ?? disconnect.error ?? pair.error} />
-      {waiting && link ? (
-        <div className="pair-code">
-          <span>Telegram should have opened. Tap <strong>Start</strong> in the chat with @{link.bot}. This page updates by itself.</span>
-          <a className="inline-link" href={link.link} target="_blank" rel="noopener noreferrer">Didn't open? Open @{link.bot}</a>
-          <em>Link works once, until {new Date(link.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.</em>
+      ))}
+      {found.data && !found.data.servers.length ? <Row label="None found" hint="Add .mcp.json, .cursor/mcp.json or .vscode/mcp.json to the project, or edit atlas.mcpServers in ~/.meadow/config.json."><span /></Row> : null}
+      {inspect ? (
+        <div className="doctor-list">
+          {caps.isLoading ? <div className="doctor-row optional"><Loader2 size={14} className="spin-slow" /><div><strong>Starting {inspect}…</strong></div></div> : null}
+          {caps.data?.error ? <div className="doctor-row bad"><XCircle size={14} /><div><strong>{inspect}</strong><span>{caps.data.error}</span></div></div> : null}
+          {caps.data?.tools.map(tool => (
+            <div className={`doctor-row ${tool.risk === "READ" ? "ok" : tool.risk === "DESTRUCTIVE" ? "bad" : "optional"}`} key={tool.tool}>
+              <span className={`risk-chip ${tool.risk.toLowerCase()}`}>{tool.risk}</span>
+              <div><strong>{tool.tool}</strong><span>{tool.description.slice(0, 160)}</span></div>
+            </div>
+          ))}
         </div>
       ) : null}
-      {own && pair.data ? <div className="pair-code"><span>Send this to {pair.data.bot ? `@${pair.data.bot}` : "your bot"}:</span><code>/pair {pair.data.code}</code></div> : null}
-      <Row label="Advanced" hint="Run your own bot, or point to a self-hosted relay.">
-        <Toggle checked={advanced} onChange={setAdvanced} label="Show advanced" />
+      <ErrorNote error={add.error ?? remove.error ?? found.error} />
+    </Section>
+  );
+}
+
+function SelfHealing() {
+  const utils = trpc.useUtils();
+  const health = trpc.setup.health.useQuery(undefined, { refetchOnWindowFocus: false });
+  const repair = trpc.setup.repair.useMutation({ onSuccess: result => utils.setup.health.setData(undefined, result.after) });
+  return (
+    <>
+      <Row label="Self-check" hint="Runs every two minutes in the background and repairs what it can: reconnects Telegram and MCP servers, re-embeds stale memory.">
+        <MotionButton className="button secondary" onClick={() => repair.mutate()} disabled={repair.isPending}><Wrench size={14} /> {repair.isPending ? "Repairing…" : "Diagnose and repair"}</MotionButton>
       </Row>
-      {advanced ? (
-        <>
-          <Row label="Bot" hint={own ? "Using your own bot token." : "Using the Meadow bot."}>
-            <select value={own ? "own" : "hosted"} onChange={event => patch({ telegram: { mode: event.target.value as "own" | "hosted" } })}>
-              <option value="hosted">Meadow bot (one click)</option>
-              <option value="own">My own bot (token from @BotFather)</option>
-            </select>
-          </Row>
-          {own ? <SecretField name="TELEGRAM_BOT_TOKEN" present={hasOwnToken} label="Bot token" placeholder="123456:ABC… from @BotFather" /> : null}
-          {!own ? (
-            <Row label="Relay URL" hint="Leave empty to use the built-in Meadow bot. Must be HTTPS (or http://localhost).">
-              <input className="text-input" placeholder="https://relay.example.com" defaultValue={config.telegram.relayUrl} onBlur={event => {
-                const value = event.target.value.trim();
-                if (value !== config.telegram.relayUrl) patch({ telegram: { relayUrl: value } });
-              }} />
-            </Row>
-          ) : null}
-        </>
+      {health.data ? (
+        <div className="doctor-list">
+          {health.data.map(check => (
+            <div className={`doctor-row ${check.ok ? "ok" : check.skipped ? "optional" : "bad"}`} key={check.area}>
+              {check.ok || check.skipped ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
+              <div><strong>{HEALTH_LABELS[check.area] ?? check.area}</strong><span>{check.detail}</span>{!check.ok && !check.skipped && check.fix ? <code>{check.fix}</code> : null}</div>
+            </div>
+          ))}
+          {repair.data?.repairs.map(item => <div className={`doctor-row ${item.ok ? "ok" : "bad"}`} key={`r-${item.area}`}><Wrench size={14} /><div><strong>Repaired: {HEALTH_LABELS[item.area] ?? item.area}</strong><span>{item.detail}</span></div></div>)}
+        </div>
       ) : null}
+      <ErrorNote error={repair.error ?? health.error} />
     </>
   );
 }
 
-export function SettingsView({ settings, overview, project }: { settings: Settings | undefined; overview: Overview | undefined; project: ProjectSummary | undefined }) {
+export function SettingsView({ settings, overview, project, onNavigate }: { settings: Settings | undefined; overview: Overview | undefined; project: ProjectSummary | undefined; onNavigate: (path: string) => void }) {
   const utils = trpc.useUtils();
   const update = trpc.updateSettings.useMutation({ onSuccess: data => utils.settings.setData(undefined, data) });
   const updateProject = trpc.updateProject.useMutation({ onSuccess: () => { utils.overview.invalidate(); utils.project.invalidate(); } });
@@ -292,6 +214,15 @@ export function SettingsView({ settings, overview, project }: { settings: Settin
         <Row label="Approvals expire after" hint="Expired approvals are always denied."><NumberInput value={config.approvals.expiryS} min={60} suffix="s" onCommit={value => patch({ approvals: { expiryS: value } })} /></Row>
       </Section>
 
+      <Section title="Automation" description="What Meadow does on its own. Plans, writes and destructive actions still wait for your approval.">
+        <Row label="Keep graph and memory live" hint="Watches git every 20 s; changed files are re-indexed and the graph is rebuilt in one transaction."><Toggle checked={config.atlas.liveUpdate} onChange={value => patch({ atlas: { liveUpdate: value } })} label="Live graph" /></Row>
+        <Row label="Impact analysis before each phase" hint="Adds the affected services, APIs, tables and owners to the engine's context."><Toggle checked={config.harness.preflightImpact} onChange={value => patch({ harness: { preflightImpact: value } })} label="Preflight impact" /></Row>
+        <Row label="Enforce detected checks" hint="Checks that passed at baseline (typecheck, lint, test, build) run after every phase."><Toggle checked={config.harness.autoVerify} onChange={value => patch({ harness: { autoVerify: value } })} label="Auto verify" /></Row>
+        <Row label="Resume interrupted runs on restart" hint="Continues from the last verified phase after a crash or reboot. Off: you resume by hand."><Toggle checked={config.harness.autoResume} onChange={value => patch({ harness: { autoResume: value } })} label="Auto resume" /></Row>
+        <Row label="Check for signed updates" hint="Only manifests signed by the Meadow publisher key are trusted."><Toggle checked={config.updates.check} onChange={value => patch({ updates: { check: value } })} label="Update checks" /></Row>
+        <Row label="Guided setup" hint="Detect a repository, build its knowledge, run checks and draft a first plan."><MotionButton className="button secondary" onClick={() => onNavigate("/welcome")}>Open setup</MotionButton></Row>
+      </Section>
+
       <Section title="Budgets" description={`Today: ${(overview?.usage.tokens ?? 0).toLocaleString()} tokens across ${overview?.usage.runs ?? 0} engine runs.`}>
         <Row label="Tokens per phase"><NumberInput value={config.budget.phaseTokens} min={1000} step={1000} onCommit={value => patch({ budget: { phaseTokens: value } })} /></Row>
         <Row label="Tokens per day"><NumberInput value={config.budget.dailyTokens} min={1000} step={1000} onCommit={value => patch({ budget: { dailyTokens: value } })} /></Row>
@@ -335,8 +266,9 @@ export function SettingsView({ settings, overview, project }: { settings: Settin
             <SecretField name="LINEAR_API_KEY" present={secrets.linear} label="Linear API key" placeholder="lin_api_…" />
           </>
         ) : null}
-        <Row label="External MCP servers" hint="Add entries to atlas.mcpServers in ~/.meadow/config.json. Their tools are offered to the operator agent."><code className="inline-code">{config.atlas.mcpServers.length ? config.atlas.mcpServers.map(server => server.name).join(", ") : "none"}</code></Row>
       </Section>
+
+      <McpSection project={project} />
 
       <Section title="Screenshots" description="Captured only from the project's own localhost preview, desktop and mobile, after checks pass.">
         <Row label="Take screenshots"><Toggle checked={config.screenshots.enabled} onChange={value => patch({ screenshots: { enabled: value } })} label="Take screenshots" /></Row>
@@ -344,6 +276,7 @@ export function SettingsView({ settings, overview, project }: { settings: Settin
       </Section>
 
       <Section title="Health and data" description="Doctor checks your tools without changing anything. Exports contain plans, checks, runs and events for one project.">
+        <SelfHealing />
         <Row label="Doctor"><MotionButton className="button secondary" onClick={() => doctor.refetch()} disabled={doctor.isFetching}><Stethoscope size={14} /> {doctor.isFetching ? "Checking…" : "Run doctor"}</MotionButton></Row>
         {doctor.data ? (
           <div className="doctor-list">

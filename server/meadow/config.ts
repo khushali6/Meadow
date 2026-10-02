@@ -40,7 +40,12 @@ export type MeadowConfig = {
     /** Shell command for the custom engine. Receives the prompt as $MEADOW_PROMPT and $MEADOW_PROMPT_FILE. */
     custom: { label: string; command: string };
   };
-  harness: { maxAttempts: number; checkTimeoutS: number; massDeleteThreshold: number; phaseGate: PhaseGate };
+  /**
+   * autoResume: continue interrupted runs when Meadow restarts. autoVerify: after every phase, also run the
+   * project's detected typecheck/lint/test/build commands that passed the baseline. preflightImpact: show the
+   * engine what a phase's changes can affect before it starts.
+   */
+  harness: { maxAttempts: number; checkTimeoutS: number; massDeleteThreshold: number; phaseGate: PhaseGate; autoResume: boolean; autoVerify: boolean; preflightImpact: boolean };
   budget: { phaseTokens: number; dailyTokens: number; phaseWallClockS: number };
   /** `hosted` talks to the Meadow bot through a relay (one-click connect); `own` uses a bot token you created. */
   telegram: { mode: "hosted" | "own"; relayUrl: string; ownerId: number | null; notificationLevel: NotificationLevel; quietHours: { enabled: boolean; start: number; end: number }; voiceReplies: boolean };
@@ -58,7 +63,11 @@ export type MeadowConfig = {
     };
     /** External MCP servers the Operator agent may call (stdio). Env values are secret names, never literals. */
     mcpServers: Array<{ name: string; command: string; args: string[]; env: string[] }>;
+    /** Keep the graph and memory in sync with the working tree (git changes are picked up automatically). */
+    liveUpdate: boolean;
   };
+  /** Signed update manifest. Empty URL turns update checks off. */
+  updates: { url: string; check: boolean };
 };
 
 export const DEFAULT_CONFIG: MeadowConfig = {
@@ -77,7 +86,7 @@ export const DEFAULT_CONFIG: MeadowConfig = {
   },
   memory: { embeddings: "local", embeddingProvider: null },
   engine: { default: "cursor", model: null, models: {}, runTimeoutS: 45 * 60, noOutputTimeoutS: 5 * 60, claudeUseFreeLlmApi: false, custom: { label: "Custom command", command: "" } },
-  harness: { maxAttempts: 3, checkTimeoutS: 600, massDeleteThreshold: 20, phaseGate: "auto" },
+  harness: { maxAttempts: 3, checkTimeoutS: 600, massDeleteThreshold: 20, phaseGate: "auto", autoResume: false, autoVerify: true, preflightImpact: true },
   budget: { phaseTokens: 2_000_000, dailyTokens: 20_000_000, phaseWallClockS: 90 * 60 },
   telegram: { mode: "hosted", relayUrl: "", ownerId: null, notificationLevel: "all", quietHours: { enabled: false, start: 22, end: 8 }, voiceReplies: false },
   screenshots: { enabled: true },
@@ -91,7 +100,9 @@ export const DEFAULT_CONFIG: MeadowConfig = {
       linear: { enabled: false, teamKey: null },
     },
     mcpServers: [],
+    liveUpdate: true,
   },
+  updates: { url: "", check: true },
 };
 
 export function meadowHome() {
@@ -120,6 +131,7 @@ function envOverrides(config: MeadowConfig): MeadowConfig {
   if (env.FREELLMAPI_BASE_URL) next.llm.baseUrl = env.FREELLMAPI_BASE_URL;
   if (env.MEADOW_LLM_MODEL) next.llm.model = env.MEADOW_LLM_MODEL;
   if (env.MEADOW_LLM_PROVIDER) next.llm.provider = env.MEADOW_LLM_PROVIDER as ProviderId;
+  if (env.MEADOW_UPDATE_URL) next.updates.url = env.MEADOW_UPDATE_URL;
   if (env.MEADOW_RELAY_URL) next.telegram.relayUrl = env.MEADOW_RELAY_URL;
   if (env.MEADOW_ENGINE) next.engine.default = env.MEADOW_ENGINE as EngineName;
   return next;

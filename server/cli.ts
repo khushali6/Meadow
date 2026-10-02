@@ -16,7 +16,8 @@ import { exportBundle, statusText } from "./meadow/service";
 const HELP = `meadow — local-first agent that builds and tests code phase by phase
 
 Usage:
-  meadow init                         Guided setup (agent provider + key, engine, Telegram pairing)
+  meadow init                         Guided setup: detects this repo, model providers, builds the graph, runs checks
+  meadow update [--yes]               Check for a signed update, verify it, back up and install
   meadow doctor                       Check engines, agent model, memory, git and optional extras
   meadow start [--port N] [--dev]     Start the daemon (dashboard + Telegram)
   meadow run <PLAN.md> [--engine E]   Run a plan from the command line (no Telegram needed)
@@ -62,11 +63,25 @@ async function init() {
   const ask = async (question: string, fallback = "") => (await rl.question(fallback ? `${question} [${fallback}]: ` : `${question}: `)).trim() || fallback;
   const config = loadConfig();
   console.log(`Meadow setup. Everything stays on this machine (${meadowHome()}).\n`);
+  getDb();
+  const { detectProject, profileLines } = await import("./meadow/setup/detect");
+  const { scanProviders } = await import("./meadow/setup/providers");
+  const cwd = process.cwd();
+  const profile = detectProject(cwd);
+  const looksLikeRepo = profile.git.repo || profile.markers.length > 0;
+  if (looksLikeRepo) {
+    console.log(`Detected in ${cwd}:`);
+    for (const line of profileLines(profile)) console.log(`  ✓ ${line}`);
+    console.log("");
+  }
 
-  const projectsDir = await ask("Projects folder", config.projectsDir);
+  const projectsDir = await ask("Projects folder (for new projects)", config.projectsDir);
   saveConfig({ projectsDir });
+  const scan = await scanProviders();
+  for (const found of scan.providers.filter(item => item.available)) console.log(`  ✓ ${found.name}${found.models.length ? ` (${found.models.slice(0, 3).join(", ")}${found.models.length > 3 ? "…" : ""})` : ""}`);
+  if (scan.note) console.log(`  · ${scan.note}`);
   console.log(`\nAgent model (planning, questions, summaries). Memory always stays on this machine.\n  ${PROVIDER_IDS.map(id => `${id}${PROVIDERS[id].type === "cloud" ? " (cloud)" : PROVIDERS[id].type === "local" ? " (local)" : ""}`).join(" | ")}`);
-  let provider = await ask("Provider", config.llm.provider);
+  let provider = await ask("Provider", scan.recommended ?? config.llm.provider);
   if (!isProviderId(provider)) {
     console.log(`  Unknown provider ${provider}. Using freellmapi.`);
     provider = "freellmapi";
@@ -124,10 +139,36 @@ async function init() {
       console.log(`\n  Pairing code: ${code}\n  Start Meadow (\`meadow start\`), then send this code to your bot within 15 minutes.\n  Only that Telegram account will be able to control Meadow. Turn on two-step verification in Telegram.\n`);
     }
   }
-  rl.close();
+  let registered: string | null = null;
+  if (looksLikeRepo && (await ask(`Set up ${cwd} as a Meadow project? (Y/n)`, "y")).toLowerCase() !== "n") {
+    rl.close();
+    const { registerRepository, buildKnowledge, generateInitialPlan, markStep } = await import("./meadow/setup/onboarding");
+    const { runBaseline } = await import("./meadow/setup/verify");
+    try {
+      const { project } = await registerRepository(cwd);
+      registered = project.name;
+      markStep("repository", "done", project.path, project.id);
+      console.log(`\nBuilding CodeAtlas for ${project.name}…`);
+      const { graph, memory } = await buildKnowledge(project.id, (step, detail) => console.log(`  ${step.padEnd(10)} ${detail}`));
+      console.log(`  ✓ ${graph.services} services · ${graph.functions} functions · ${graph.apis} APIs · ${graph.tables} tables · ${memory.chunks} memory chunks`);
+      markStep("codeatlas", "done", `${graph.functions} functions`);
+      markStep("memory", "done", `${memory.chunks} chunks`);
+      if (profile.commands.length) {
+        console.log("\nRunning the detected checks once (baseline)…");
+        const baseline = await runBaseline(project.id, result => console.log(`  ${result.passed ? "✓" : "✗"} ${result.cmd} (${(result.durationMs / 1000).toFixed(1)}s)`));
+        markStep("verify", "done", `${baseline.results.filter(result => result.passed).length}/${baseline.results.length} pass`);
+      }
+      const plan = generateInitialPlan(project.id);
+      markStep("plan", "done", `Plan v${plan.version}`);
+      console.log(`\n  ✓ Initial plan v${plan.version} drafted from the analysis. Review and approve it in the dashboard.`);
+    } catch (error) {
+      console.log(`  ✗ ${(error as Error).message}`);
+    }
+  } else rl.close();
   console.log("\nRunning doctor…\n");
   await doctor();
-  console.log("\nNext: `meadow start`.");
+  if (registered) (await import("./meadow/setup/onboarding")).completeOnboarding();
+  console.log(`\nNext: \`meadow start\`${registered ? `, then review the plan for ${registered}` : ""}.`);
 }
 
 function printEvent(event: MeadowEvent) {
@@ -233,6 +274,42 @@ async function atlas(args: string[]): Promise<number> {
   return 1;
 }
 
+async function update(yes: boolean): Promise<number> {
+  const { checkForUpdate, downloadUpdate } = await import("./meadow/core/updates");
+  const result = await checkForUpdate();
+  if (result.status === "not_configured") {
+    console.log(`Meadow ${result.current}. Signed updates are not configured for this build; update with your package manager.`);
+    return 0;
+  }
+  if (result.status === "error") {
+    console.error(`Update check failed: ${result.error}`);
+    return 1;
+  }
+  if (result.status === "up_to_date") {
+    console.log(`Meadow ${result.current} is up to date.`);
+    return 0;
+  }
+  console.log(`Meadow ${result.latest} is available (you have ${result.current}).${result.notes ? `\n\n${result.notes}\n` : ""}`);
+  if (!yes) {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const answer = (await rl.question("Download, verify and install it? (y/N): ")).trim().toLowerCase();
+    rl.close();
+    if (answer !== "y") return 0;
+  }
+  const file = await downloadUpdate(result);
+  console.log(`  ✓ Signature and checksum verified (${path.basename(file)})`);
+  const backup = getDb().backup(`pre-${result.latest}`);
+  if (backup) console.log(`  ✓ Database backed up to ${backup}`);
+  const { spawnSync } = await import("node:child_process");
+  const install = spawnSync("npm", ["install", "-g", file], { stdio: "inherit" });
+  if (install.status !== 0) {
+    console.error("  ✗ Install failed. Your current version and data are unchanged.");
+    return 1;
+  }
+  console.log("  ✓ Installed. Restart Meadow (`meadow start`); migrations run with a backup and `meadow doctor` checks the result.");
+  return 0;
+}
+
 async function main() {
   const [command, ...args] = process.argv.slice(2);
   switch (command) {
@@ -277,6 +354,8 @@ async function main() {
       for (const row of rows) console.log(statusText(row.id));
       return 0;
     }
+    case "update":
+      return update(args.includes("--yes"));
     case "pair":
       getDb();
       console.log(`Pairing code: ${createPairingCode()} (valid 15 minutes). Send it to your bot.`);

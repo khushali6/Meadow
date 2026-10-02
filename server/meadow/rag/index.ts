@@ -93,6 +93,39 @@ export async function indexProject(projectId: number, root: string): Promise<{ f
   return { files: files.length, chunks: rows.length, embedded: Boolean(space), space };
 }
 
+/** Re-indexes only the given files (changed, added or deleted), leaving every other chunk untouched. */
+export async function reindexFiles(projectId: number, root: string, files: string[]): Promise<{ files: number; chunks: number }> {
+  const db = getDb();
+  const rows: Array<{ path: string; text: string }> = [];
+  const touched = Array.from(new Set(files.map(file => file.replace(/^\.\//, "")))).filter(file => isSafeRelative(file) && !isIgnored(file));
+  for (const file of touched) {
+    const full = path.join(root, file);
+    try {
+      if (!TEXT_EXT.test(path.basename(file)) || fs.statSync(full).size > MAX_FILE_BYTES) continue;
+      const text = fs.readFileSync(full, "utf8");
+      if (text.includes("\0") || containsSecret(text)) continue;
+      for (const chunk of chunkText(text)) rows.push({ path: file, text: chunk });
+    } catch {
+      continue;
+    }
+  }
+  const embedded = await providerEmbed(rows.map(row => `${row.path}\n${row.text}`));
+  const space = spaceForWrite(embedded);
+  db.raw.exec("BEGIN");
+  try {
+    for (const file of touched) db.run("DELETE FROM chunks WHERE project_id = ? AND source = 'code' AND path = ?", projectId, file);
+    rows.forEach((row, i) => db.insert("chunks", { project_id: projectId, source: "code", path: row.path, text: row.text, embedding: embedded ? JSON.stringify(embedded.vectors[i]) : null, embedding_space: space }));
+    db.raw.exec("COMMIT");
+  } catch (error) {
+    db.raw.exec("ROLLBACK");
+    throw error;
+  }
+  localCache.delete(projectId);
+  return { files: touched.length, chunks: rows.length };
+}
+
+const isSafeRelative = (file: string) => !path.isAbsolute(file) && !file.split("/").includes("..");
+
 export async function indexMemory(projectId: number, label: string, text: string) {
   if (containsSecret(text)) return;
   const embedded = await providerEmbed([text]);
