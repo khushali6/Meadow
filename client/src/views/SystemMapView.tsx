@@ -1,6 +1,6 @@
 import "@xyflow/react/dist/style.css";
 import { Background, Controls, MarkerType, MiniMap, ReactFlow, useEdgesState, useNodesState, type Edge, type Node } from "@xyflow/react";
-import { Crosshair, Network, Route, X } from "lucide-react";
+import { Crosshair, Network, Route, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { MotionButton, Reveal } from "../components/animation/motion";
 import { EmptyState, ErrorNote, PageHeader } from "../components/common";
@@ -104,9 +104,14 @@ function FlowCanvas({ flow, dark, fitTo, onNodeClick, onPaneClick }: { flow: { n
   );
 }
 
-function NodePanel({ nodeId, onClose, onPathFrom, pathFrom, onFocus }: { nodeId: number; onClose: () => void; onPathFrom: (id: number) => void; pathFrom: number | null; onFocus: (id: number) => void }) {
+function NodePanel({ projectId, nodeId, onClose, onPathFrom, pathFrom, onFocus, onImpact }: { projectId: number; nodeId: number; onClose: () => void; onPathFrom: (id: number) => void; pathFrom: number | null; onFocus: (id: number) => void; onImpact: (highlight: Highlight) => void }) {
   const detail = trpc.atlas.node.useQuery({ nodeId });
+  const [showImpact, setShowImpact] = useState(false);
+  const impact = trpc.atlas.impact.useQuery({ projectId, nodeId }, { enabled: showImpact });
   const node = detail.data?.node;
+  useEffect(() => {
+    if (impact.data && node) onImpact({ nodes: [nodeId, ...impact.data.impacted.map(item => item.id)], edges: impact.data.edges, question: `Change impact of ${node.name}: ${impact.data.impacted.length} affected, ${impact.data.risk} risk` });
+  }, [impact.data]);
   return (
     <aside className="map-detail panel">
       <div className="panel-heading">
@@ -117,7 +122,18 @@ function NodePanel({ nodeId, onClose, onPathFrom, pathFrom, onFocus }: { nodeId:
       <div className="map-detail-actions">
         <MotionButton className="button tiny secondary" onClick={() => onPathFrom(nodeId)}><Route size={12} /> {pathFrom === nodeId ? "Pick a target…" : "Path from here"}</MotionButton>
         {node?.kind === "service" ? <MotionButton className="button tiny secondary" onClick={() => onFocus(nodeId)}><Crosshair size={12} /> Code view</MotionButton> : null}
+        <MotionButton className="button tiny secondary" onClick={() => setShowImpact(true)}><Zap size={12} /> {impact.isFetching ? "Tracing…" : "Change impact"}</MotionButton>
       </div>
+      {showImpact && impact.data ? (
+        <div className="impact-report">
+          <div className="impact-head"><span className={`risk-tag ${impact.data.risk === "high" ? "high" : ""}`}>{impact.data.risk} risk</span><strong>{impact.data.impacted.length} affected</strong></div>
+          {impact.data.reasons.length ? <ul className="impact-reasons">{impact.data.reasons.map(reason => <li key={reason}>{reason}</li>)}</ul> : <p className="impact-empty">Nothing in the graph depends on this.</p>}
+          {impact.data.owners.length ? <div className="impact-row"><span>Owners</span>{impact.data.owners.join(", ")}</div> : null}
+          {impact.data.tests.length ? <div className="impact-row"><span>Tests</span>{impact.data.tests.slice(0, 6).join(", ")}</div> : null}
+          {impact.data.incidents.length ? <div className="impact-row"><span>Past incidents</span>{impact.data.incidents.map(item => item.name).join(", ")}</div> : null}
+          <ul className="map-edges">{impact.data.impacted.slice(0, 30).map(item => <li key={item.id}><span className="atlas-via">hop {item.depth}</span><span className={`atlas-node-pill kind-${item.kind}`}>{item.name}</span><em className="impact-via">{item.via}</em></li>)}</ul>
+        </div>
+      ) : null}
       <ul className="map-edges">
         {detail.data?.edges.map((edge, i) => <li key={i}><span className="atlas-via">{edge.direction === "out" ? `─${edge.kind}→` : `←${edge.kind}─`}</span><span className={`atlas-node-pill kind-${edge.other.kind}`}>{edge.other.name}</span></li>)}
       </ul>
@@ -189,7 +205,9 @@ export function SystemMapView({ project, onNavigate }: { project: ProjectSummary
         </div>
         {selected ? (
           <NodePanel
+            projectId={projectId}
             nodeId={selected}
+            onImpact={next => { setPathFrom(null); setPathTo(null); setHighlight(next); }}
             pathFrom={pathFrom}
             onClose={() => setSelected(null)}
             onPathFrom={id => { setPathFrom(id); setPathTo(null); setHighlight(null); }}

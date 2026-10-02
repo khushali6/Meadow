@@ -9,6 +9,7 @@ import { telegram, createPairingCode } from "./meadow/channels/telegram";
 import { getSecret, loadConfig, saveConfig, setSecret } from "./meadow/config";
 import { decide, listApprovals } from "./meadow/core/approvals";
 import { auditLog, RISK_POLICY } from "./meadow/core/audit";
+import { getDb } from "./meadow/core/db";
 import { fullDoctor, llmStatus } from "./meadow/doctor";
 import { PROVIDERS } from "./meadow/llm/catalog";
 import { healthCheck, llmRouting, providerFor, providerSummaries } from "./meadow/llm/router";
@@ -18,7 +19,9 @@ import { handleAction, handleText } from "./meadow/intake/conversation";
 import { improvePlan } from "./meadow/intake/llm";
 import { parsePlan } from "./meadow/planning/format";
 import { addNote, approvePlan, createProject, getPlan, getProject, savePlanVersion, updateProject } from "./meadow/projects";
+import { changeImpact, nodesForPaths } from "./meadow/atlas/impact";
 import { embedDocs } from "./meadow/atlas/ingest";
+import { metrics } from "./meadow/metrics";
 import { renderBrief } from "./meadow/brief/brief";
 import { planNextSteps, projectStatus } from "./meadow/brief/next";
 import { bus } from "./meadow/core/events";
@@ -66,6 +69,17 @@ const atlasRouter = router({
   map: publicProcedure.input(z.object({ projectId: z.number(), layer: z.enum(["architecture", "apis", "history", "code"]), focus: z.number().nullable().default(null), extra: z.array(z.number()).max(60).default([]) })).query(({ input }) => systemMap(input.projectId, input.layer, input.focus, input.extra)),
   node: publicProcedure.input(z.object({ nodeId: z.number() })).query(({ input }) => nodeDetail(input.nodeId)),
   path: publicProcedure.input(z.object({ from: z.number(), to: z.number() })).query(({ input }) => pathBetween(input.from, input.to)),
+  impact: publicProcedure.input(z.object({ projectId: z.number(), nodeId: z.number().optional(), paths: z.array(z.string().max(300)).max(50).optional(), depth: z.number().int().min(1).max(5).default(3) })).query(({ input }) => {
+    const seeds = input.nodeId ? [input.nodeId] : nodesForPaths(input.projectId, input.paths ?? []).map(node => node.id);
+    return changeImpact(seeds, input.depth);
+  }),
+  phaseImpact: publicProcedure.input(z.object({ phaseId: z.number() })).query(async ({ input }) => {
+    const phase = getDb().get<{ project_id: number }>("SELECT plans.project_id FROM phases JOIN plans ON plans.id = phases.plan_id WHERE phases.id = ?", input.phaseId);
+    if (!phase) throw new Error("Phase not found");
+    const diff = await phaseDiff(input.phaseId);
+    const paths = diff.files.map(file => file.path);
+    return { paths, report: changeImpact(nodesForPaths(phase.project_id, paths).map(node => node.id)) };
+  }),
   search: publicProcedure.input(z.object({ projectId: z.number(), query: z.string().min(2).max(500), mode: z.enum(["hybrid", "vector", "bm25", "graph", "symbol"]).default("hybrid") })).query(({ input }) => runTool("search_code", { query: input.query, mode: input.mode, k: 12 }, { projectId: input.projectId, actor: "ui" })),
   investigate: publicProcedure.input(z.object({ projectId: z.number(), question: z.string().min(5).max(1000), mode: z.enum(["agentic", "hybrid", "graph", "vector"]).default("agentic") })).mutation(async ({ input }) => ({ id: await startInvestigation(input.projectId, input.question, input.mode) })),
   investigations: publicProcedure.input(z.object({ projectId: z.number() })).query(({ input }) => listInvestigations(input.projectId)),
@@ -175,6 +189,7 @@ export const appRouter = router({
     return result;
   }),
   audit: publicProcedure.input(z.object({ projectId: z.number().nullable(), limit: z.number().int().min(1).max(500).default(100) })).query(({ input }) => ({ rows: auditLog(input.projectId, input.limit), policy: RISK_POLICY })),
+  metrics: publicProcedure.input(z.object({ projectId: z.number().nullable(), days: z.number().int().min(1).max(90).default(14) })).query(({ input }) => metrics(input.projectId, input.days)),
   memoryStatus: publicProcedure.input(z.object({ projectId: z.number() })).query(({ input }) => memoryStatus(input.projectId)),
   reembed: publicProcedure.input(z.object({ projectId: z.number() })).mutation(async ({ input }) => {
     const chunks = await reembed(input.projectId);

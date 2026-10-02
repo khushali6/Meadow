@@ -12,6 +12,7 @@ import { redact, tail } from "../core/redact";
 import { harness } from "../harness/runner";
 import { addNote, approvePlan, getProject, savePlanVersion } from "../projects";
 import { githubRepo } from "./connectors";
+import { changeImpact, nodesForPaths } from "./impact";
 import type { LlmUsage } from "./llm";
 import { nameVariants } from "./parse";
 import { releaseDiff, retrieve, type Strategy } from "./retrieve";
@@ -368,6 +369,21 @@ export const TOOLS: ToolDef[] = [
       const checks = args.checks?.length ? args.checks : detectTestCommands(project.path);
       const plan = fixPlanMarkdown({ projectName: project.name, title: args.title, description: args.description, files: args.files ?? [], checks });
       return gated(ctx, "propose_patch", `Fix with Meadow: ${args.title}`, `Engine: ${project.engine}\nFiles: ${(args.files ?? []).join(", ") || "agent decides"}\nChecks: ${checks.join("; ") || "files changed"}\n\n${args.description.slice(0, 1200)}`, { ...args, plan }, "high");
+    },
+  }),
+  define({
+    name: "change_impact", title: "Change impact", risk: "READ",
+    description: "What a change to an entity or to files can affect: dependent services, APIs, tables, owners, tests and past incidents, with the relation behind each.",
+    shape: { entity: z.string().min(1).max(200).optional(), paths: z.array(z.string().max(300).refine(isSafeRelativePath, "Paths must be relative paths inside the project")).max(50).optional() },
+    async run(args, ctx) {
+      const seeds = args.entity ? [resolveEntity(ctx.projectId, args.entity, ["service", "api", "table", "file", "function", "class", "module", "infra"])].filter((node): node is AtlasNode => Boolean(node)) : nodesForPaths(ctx.projectId, args.paths ?? []);
+      if (!seeds.length) return { summary: "Nothing in the knowledge graph matches. Build or refresh the graph first.", data: null };
+      const report = changeImpact(seeds.map(node => node.id));
+      return {
+        summary: `${report.impacted.length} affected (${report.risk} risk): ${report.reasons.join("; ") || "no dependents"}`,
+        data: report,
+        evidence: report.impacted.slice(0, 12).map(item => ({ title: `${item.kind} ${item.name}`, text: item.via, nodeId: item.id, path: item.path, kind: item.kind })),
+      };
     },
   }),
   define({

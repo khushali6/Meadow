@@ -1,5 +1,5 @@
 import { Toaster } from "@/components/ui/sonner";
-import { Activity, BookOpen, Boxes, Network, Radar, ChevronDown, FileText, FolderGit2, KeyRound, Leaf, Menu, MessageSquarePlus, Moon, Settings2, ShieldCheck, Sun } from "lucide-react";
+import { Activity, BookOpen, Gauge, Boxes, Network, Radar, ChevronDown, FileText, FolderGit2, KeyRound, Leaf, Menu, MessageSquarePlus, Moon, Settings2, ShieldCheck, Sun } from "lucide-react";
 import { useGSAP } from "@gsap/react";
 import { gsap } from "gsap";
 import { MotionConfig } from "motion/react";
@@ -25,6 +25,7 @@ import { SettingsView } from "./views/SettingsView";
 gsap.registerPlugin(useGSAP);
 gsap.defaults({ ease: "power3.out", duration: 0.55 });
 
+const MetricsView = lazy(() => import("./views/MetricsView").then(module => ({ default: module.MetricsView })));
 const SystemMapView = lazy(() => import("./views/SystemMapView").then(module => ({ default: module.SystemMapView })));
 
 const NAV = [
@@ -36,6 +37,7 @@ const NAV = [
   { key: "/memory", label: "Context index", icon: BookOpen },
   { key: "/atlas", label: "CodeAtlas", icon: Radar },
   { key: "/map", label: "System map", icon: Network },
+  { key: "/metrics", label: "Observability", icon: Gauge },
 ] as const;
 
 const PROJECT_KEY = "meadow-project";
@@ -221,8 +223,9 @@ function Dashboard() {
           {location === "/memory" ? <MemoryView key={project?.id ?? 0} project={project} /> : null}
           {location === "/atlas" ? <InvestigateView key={project?.id ?? 0} project={project} onNavigate={go} /> : null}
           {location === "/map" ? <Suspense fallback={<div className="event-empty">Loading the system map…</div>}><SystemMapView key={project?.id ?? 0} project={project} onNavigate={go} /></Suspense> : null}
+          {location === "/metrics" ? <Suspense fallback={<div className="event-empty">Loading metrics…</div>}><MetricsView key={project?.id ?? 0} project={project} /></Suspense> : null}
           {location === "/settings" ? <SettingsView settings={settings.data} overview={overview.data} project={project} /> : null}
-          {!["/", "/plans", "/request", "/projects", "/approvals", "/memory", "/atlas", "/map", "/settings"].includes(location) ? <EmptyState icon={Leaf} title="Page not found" body="That page doesn't exist." action={<MotionButton className="button primary" onClick={() => go("/")}>Back to the live console</MotionButton>} /> : null}
+          {!["/", "/plans", "/request", "/projects", "/approvals", "/memory", "/atlas", "/map", "/metrics", "/settings"].includes(location) ? <EmptyState icon={Leaf} title="Page not found" body="That page doesn't exist." action={<MotionButton className="button primary" onClick={() => go("/")}>Back to the live console</MotionButton>} /> : null}
         </div>
       </main>
     </div>

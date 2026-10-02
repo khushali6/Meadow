@@ -820,3 +820,29 @@ button.cite-chip:hover { background: var(--sun); }
 .audit-table td.result-ok { color: #3f6b41; }
 .audit-wrap { overflow-x: auto; }
 .audit-policy { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 0 16px 12px; font-size: 11px; color: var(--muted); }
+.impact-report { border-top: 1px solid var(--ink); margin-top: 10px; padding-top: 10px; display: grid; gap: 8px; }
+.impact-head { display: flex; align-items: center; gap: 8px; }
+.impact-head strong { font-size: 12px; }
+.impact-reasons { margin: 0; padding-left: 16px; font-size: 11px; color: var(--ink); display: grid; gap: 3px; }
+.impact-row { font-size: 11px; }
+.impact-row span { display: inline-block; min-width: 90px; color: var(--muted); font: 9px ui-monospace, monospace; text-transform: uppercase; }
+.impact-empty { font-size: 11px; color: var(--muted); margin: 0; }
+.impact-via { display: block; flex-basis: 100%; color: var(--muted); font: 9px ui-monospace, monospace; font-style: normal; }
+
+/* Observability */
+.metrics-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+@media (max-width: 1000px) { .metrics-grid { grid-template-columns: 1fr; } }
+.metrics-section { padding-bottom: 14px; display: grid; gap: 12px; align-content: start; }
+.metrics-section > table, .metrics-section > .metric-bars, .metrics-section > .metric-reasons, .metrics-section > .metric-tiles { margin: 0 16px; width: calc(100% - 32px); }
+.metric-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); border: 1px solid var(--ink); }
+.metric-tile { display: grid; gap: 4px; padding: 10px 12px; border-right: 1px solid var(--line); }
+.metric-tile:last-child { border-right: 0; }
+.metric-tile span { color: var(--muted); font: 9px ui-monospace, monospace; text-transform: uppercase; }
+.metric-tile strong { font: 600 20px ui-monospace, monospace; }
+.metric-tile em { color: var(--muted); font-size: 10px; font-style: normal; }
+.metric-bars { display: flex; align-items: flex-end; gap: 3px; height: 90px; border-bottom: 1px solid var(--ink); padding-top: 6px; }
+.metric-bar { flex: 1; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 3px; }
+.metric-bar span { width: 100%; min-height: 1px; background: var(--ink); }
+.metric-bar span.has-failed { background: var(--error); }
+.metric-bar em { font: 8px ui-monospace, monospace; color: var(--muted); font-style: normal; }
+.metric-reasons { display: flex; flex-wrap: wrap; gap: 6px; }
