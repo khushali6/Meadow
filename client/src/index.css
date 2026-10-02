@@ -794,3 +794,21 @@ button.cite-chip:hover { background: var(--sun); }
 .memory-status { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 10px 14px; margin-bottom: 14px; border: 1px solid var(--ink); background: var(--paper); font-size: 11px; }
 .memory-status strong { font-weight: 700; }
 .memory-status em { flex-basis: 100%; color: var(--muted); font: 9px ui-monospace, monospace; font-style: normal; text-transform: uppercase; }
+
+/* Project status panel */
+.status-panel { border: 1px solid var(--ink); background: var(--paper); padding: 14px 16px; margin: 0 0 16px; display: grid; gap: 12px; }
+.status-panel-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.status-panel-head .panel-kicker { display: inline-flex; align-items: center; gap: 6px; }
+.status-panel-head h2 { margin: 6px 0 0; font-size: 15px; }
+.status-roadmap { display: flex; gap: 3px; flex-wrap: wrap; }
+.roadmap-cell { flex: 1 1 18px; min-width: 14px; max-width: 64px; height: 8px; background: var(--line); }
+.roadmap-cell.passed { background: #3f6b41; }
+.roadmap-cell.skipped { background: var(--line-strong); }
+.roadmap-cell.blocked { background: var(--error); }
+.roadmap-cell.running, .roadmap-cell.fixing, .roadmap-cell.verifying, .roadmap-cell.preparing { background: var(--sun); }
+.status-suggestions { display: grid; gap: 0; border-top: 1px solid var(--line); }
+.suggestion { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.suggestion > div { display: grid; gap: 2px; }
+.suggestion strong { font-size: 12px; }
+.suggestion span { color: var(--muted); font-size: 11px; }
+.status-brief pre { margin: 8px 0 0; max-height: 360px; overflow: auto; padding: 12px; background: #1d211e; color: #dfe7dc; font: 10px/1.6 ui-monospace, monospace; white-space: pre-wrap; }

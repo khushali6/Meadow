@@ -12,6 +12,7 @@ import { getProject, parsedActivePlan, phasesFor, projectRules, touchProject, ty
 import { indexMemory, indexProject, promptContext } from "../rag/index";
 import { captureRoutes } from "../visual/capture";
 import { startPreview, type PreviewHandle } from "../visual/preview";
+import { projectBrief } from "../brief/brief";
 import { runGuards } from "./guards";
 import { compileFixPrompt, compilePhasePrompt, rulesFileContent } from "./prompts";
 import { summarizePhase } from "./summarize";
@@ -376,9 +377,10 @@ export class Harness {
           attemptsThisRun += 1;
           this.setPhase(row, { status: lastFailure || guardFeedback ? "fixing" : "running", attempts: row.attempts + 1 });
           const context = await promptContext(project.id, project.path, `${phase.name} ${phase.tasks.join(" ")}`);
+          const brief = projectBrief(project.id, lastFailure ? 2500 : 6000, phase.id);
           const prompt = lastFailure
-            ? compileFixPrompt({ plan, phase, projectPath: project.path, failing: { check: lastFailure.check, exitCode: lastFailure.exitCode, output: lastFailure.output }, hint: state.hint ?? undefined, guardFeedback })
-            : compilePhasePrompt({ plan, phase, projectPath: project.path, projectRules: projectRules(project), previousSummaries, context, guardFeedback: [guardFeedback, state.hint ? `Hint from the user: ${state.hint}` : ""].filter(Boolean).join("\n") });
+            ? compileFixPrompt({ plan, phase, projectPath: project.path, failing: { check: lastFailure.check, exitCode: lastFailure.exitCode, output: lastFailure.output }, hint: state.hint ?? undefined, guardFeedback, brief, attempt: { n: attemptsThisRun, max: config.harness.maxAttempts } })
+            : compilePhasePrompt({ plan, phase, projectPath: project.path, projectRules: projectRules(project), previousSummaries, context, brief, guardFeedback: [guardFeedback, state.hint ? `Hint from the user: ${state.hint}` : ""].filter(Boolean).join("\n") });
           state.hint = null;
           const result = await this.runEngine(state, project, row, prompt, lastFailure ? "fix" : "initial");
           engineReport = result.report || engineReport;

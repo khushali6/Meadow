@@ -18,6 +18,8 @@ import { improvePlan } from "./meadow/intake/llm";
 import { parsePlan } from "./meadow/planning/format";
 import { addNote, approvePlan, createProject, getPlan, getProject, savePlanVersion, updateProject } from "./meadow/projects";
 import { embedDocs } from "./meadow/atlas/ingest";
+import { renderBrief } from "./meadow/brief/brief";
+import { planNextSteps, projectStatus } from "./meadow/brief/next";
 import { bus } from "./meadow/core/events";
 import { indexMemory, indexProject, memoryStatus, reembed, search } from "./meadow/rag/index";
 import { exportBundle, notesFor, phaseDiff, phaseEvidence, planHistory, projectDetail, projectsOverview, usageToday } from "./meadow/service";
@@ -162,6 +164,15 @@ export const appRouter = router({
   }),
   search: publicProcedure.input(z.object({ projectId: z.number(), query: z.string().min(1).max(500) })).query(({ input }) => search(input.projectId, input.query, 10)),
   reindex: publicProcedure.input(z.object({ projectId: z.number() })).mutation(({ input }) => indexProject(input.projectId, getProject(input.projectId).path)),
+  projectStatus: publicProcedure.input(z.object({ projectId: z.number() })).query(({ input }) => {
+    const status = projectStatus(input.projectId);
+    return { ...status, briefText: renderBrief(status.brief, 6000), brief: { ...status.brief, spec: "" } };
+  }),
+  planNext: publicProcedure.input(z.object({ projectId: z.number(), request: z.string().max(2000).optional() })).mutation(async ({ input }) => {
+    const result = await planNextSteps(input.projectId, input.request);
+    bus.emitEvent({ projectId: input.projectId, type: "plan_ready", title: `Plan v${result.version} drafted with ${result.added.length} new phase${result.added.length === 1 ? "" : "s"}`, detail: result.added.join(", ") });
+    return result;
+  }),
   memoryStatus: publicProcedure.input(z.object({ projectId: z.number() })).query(({ input }) => memoryStatus(input.projectId)),
   reembed: publicProcedure.input(z.object({ projectId: z.number() })).mutation(async ({ input }) => {
     const chunks = await reembed(input.projectId);

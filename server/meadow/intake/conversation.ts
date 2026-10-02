@@ -1,3 +1,4 @@
+import { planNextSteps, projectStatus } from "../brief/next";
 import { chatAction, chatInvestigate } from "../atlas/chat";
 import { loadConfig, saveConfig, type NotificationLevel } from "../config";
 import { decide } from "../core/approvals";
@@ -273,6 +274,7 @@ const HELP = `Commands:
 /new <description> — start a new project
 /plan — current plan and phase states
 /status — short status
+/next [focus] — draft the next phases as a new plan version for approval
 /phase — current phase detail
 /pause /resume /stop — control the run
 /retry [hint] — retry the current phase
@@ -321,6 +323,24 @@ async function command(state: ConversationState, text: string): Promise<Reply> {
     }
     case "/status":
       return { text: statusText(requireProject(state)) };
+    case "/next": {
+      const projectId = requireProject(state);
+      const status = projectStatus(projectId);
+      if (status.draftPlan) {
+        state.stage = "plan_review";
+        state.planId = status.draftPlan.id;
+        return reviewReply(status.draftPlan.id, `Plan v${status.draftPlan.version} is already waiting for approval.`);
+      }
+      try {
+        const result = await planNextSteps(projectId, arg || undefined);
+        state.stage = "plan_review";
+        state.planId = result.planId;
+        return reviewReply(result.planId, `Next steps for ${getProject(projectId).name}: ${result.added.length} new phase${result.added.length === 1 ? "" : "s"}. Finished phases are untouched.`);
+      } catch (error) {
+        const tips = status.suggestions.slice(0, 3).map(item => `- ${item.label}: ${item.detail}`).join("\n");
+        return { text: `${(error as Error).message}${tips ? `\n\nWhat you can do now:\n${tips}` : ""}` };
+      }
+    }
     case "/phase": {
       const projectId = requireProject(state);
       const phase = harness.currentPhase(projectId);

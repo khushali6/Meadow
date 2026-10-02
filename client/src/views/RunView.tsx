@@ -4,6 +4,7 @@ import { useMemo, useRef, useState } from "react";
 import { EmptyState, ErrorNote, PageHeader, StatusTag, clockTime, relativeTime } from "../components/common";
 import { MotionButton, Reveal, TabIndicator } from "../components/animation/motion";
 import { ExecutionPipeline, useCheckpointLines, useStaggerNewRows, type PipelineStage } from "../components/animation/technical";
+import { StatusPanel } from "../components/StatusPanel";
 import { screenshotUrl } from "../lib/api";
 import { trpc } from "../lib/trpc";
 import type { Event, Phase, ProjectDetail } from "../lib/types";
@@ -121,6 +122,7 @@ export function RunView({ detail, onNavigate }: { detail: ProjectDetail; onNavig
             )}
           </div>
       </Reveal>
+      <StatusPanel projectId={project.id} onNavigate={onNavigate} onAction={action => act(action)} />
       <div className="run-meta-row">
         <div className="run-meta">
           <span className="live-status">{active ? <span className="pulse-dot" /> : null}<StatusTag status={status} /> {current ? `phase ${phases.indexOf(current) + 1} of ${phases.length}` : `${phases.length} of ${phases.length}`}</span>

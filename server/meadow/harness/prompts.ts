@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { homePath } from "../config";
 import { redact, tail } from "../core/redact";
+import { untrusted, UNTRUSTED_RULE } from "../brief/brief";
 import { checkLabel, type Check, type Plan, type PlanPhase } from "../planning/format";
 
 export const PHASE_TEMPLATE = `# Role
@@ -14,6 +15,9 @@ Work only inside this repository. Do not touch files outside it.
 # Constraints
 {constraints}
 {project_rules}
+
+# Project brief (whole plan and current state)
+{project_brief}
 
 # What has been done so far
 {previous_phase_summaries}
@@ -38,13 +42,20 @@ These must all pass before you finish:
 4. Do not install anything outside the project (no global installs).
 5. Do not delete files you did not create unless a task requires it.
 6. Never write secrets, API keys or tokens into files.
-7. When finished, reply with: files changed, checks run with results, anything left undone.
+7. Stay within this phase. Later phases in the roadmap are context, not work for now.
+8. {untrusted_rule}
+9. When finished, reply with: files changed, checks run with results, anything left undone.
 {guard_feedback}`;
 
 export const FIX_TEMPLATE = `# Context
 Same repository and branch. The previous attempt did not pass verification.
-Phase: {phase_name}
+Phase: {phase_name} (attempt {attempt})
+Tasks:
+{tasks_as_checklist}
 Done when: {done_when}
+
+# Project brief
+{project_brief}
 
 # Failing check
 Command: {command}
@@ -54,6 +65,7 @@ Output (last {n} lines):
 
 # Instructions
 Fix the cause of this failure. Do not weaken, skip or delete the check.
+{untrusted_rule}
 Run the failing command again and confirm it passes.
 Then run the remaining acceptance checks:
 {other_checks}
@@ -91,6 +103,7 @@ export type PhasePromptInput = {
   projectRules: string;
   previousSummaries: Array<{ name: string; summary: string }>;
   context: string;
+  brief?: string;
   guardFeedback?: string;
 };
 
@@ -101,11 +114,13 @@ export function compilePhasePrompt(input: PhasePromptInput): string {
     goal: plan.goal,
     constraints: constraints.length ? constraints.map(item => `- ${item}`).join("\n") : "- None beyond the rules below.",
     project_rules: input.projectRules.trim() ? `\nProject rules:\n${input.projectRules.trim()}` : "",
+    project_brief: input.brief?.trim() || "No brief available.",
+    untrusted_rule: UNTRUSTED_RULE,
     previous_phase_summaries: input.previousSummaries.length ? input.previousSummaries.map(item => `- ${item.name}: ${item.summary}`).join("\n") : "Nothing yet. This is the first phase.",
     phase_name: phase.name,
     tasks_as_checklist: phase.tasks.map(task => `- [ ] ${task}`).join("\n"),
     done_when: phase.doneWhen,
-    rag_snippets_or_file_list: input.context.trim() || "The repository is empty or has no relevant files yet.",
+    rag_snippets_or_file_list: input.context.trim() ? untrusted(input.context.trim(), "repository") : "The repository is empty or has no relevant files yet.",
     checks_as_commands: phase.checks.map(check => checkAsCommand(check, plan.preview?.url)).join("\n") + (plan.preview ? `\n\nPreview command: \`${plan.preview.command}\` (serves ${plan.preview.url})` : ""),
     guard_feedback: input.guardFeedback ? `\n# Corrections from the previous attempt\n${input.guardFeedback}` : "",
   }));
@@ -119,6 +134,8 @@ export type FixPromptInput = {
   hint?: string;
   guardFeedback?: string;
   tailLines?: number;
+  brief?: string;
+  attempt?: { n: number; max: number };
 };
 
 export function compileFixPrompt(input: FixPromptInput): string {
@@ -126,11 +143,15 @@ export function compileFixPrompt(input: FixPromptInput): string {
   const others = input.phase.checks.filter(check => check !== input.failing.check);
   return redact(render(loadTemplate("fix", input.projectPath), {
     phase_name: input.phase.name,
+    attempt: input.attempt ? `${input.attempt.n} of ${input.attempt.max}` : "retry",
+    tasks_as_checklist: input.phase.tasks.map(task => `- [ ] ${task}`).join("\n"),
+    project_brief: input.brief?.trim() || "No brief available.",
+    untrusted_rule: UNTRUSTED_RULE,
     done_when: input.phase.doneWhen,
     command: checkLabel(input.failing.check),
     exit_code: input.failing.exitCode === null ? "none (timed out or not a command)" : String(input.failing.exitCode),
     n: String(n),
-    output_tail: "```\n" + tail(input.failing.output, n) + "\n```",
+    output_tail: untrusted(tail(input.failing.output, n), "check output"),
     other_checks: others.length ? others.map(check => checkAsCommand(check, input.plan.preview?.url)).join("\n") : "- (no other checks)",
     hint: input.hint ? `\n# Hint from the user\n${input.hint}` : "",
     guard_feedback: input.guardFeedback ? `\n# Corrections\n${input.guardFeedback}` : "",
