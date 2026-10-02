@@ -1,3 +1,4 @@
+import { currentSpace, providerEmbed } from "../memory/embeddings";
 import fs from "node:fs";
 import path from "node:path";
 import { getDb, now } from "../core/db";
@@ -6,7 +7,6 @@ import { containsSecret } from "../core/redact";
 import { getProject } from "../projects";
 import { listProjectFiles } from "../rag/index";
 import { ingestConnectors } from "./connectors";
-import { tryEmbed } from "./llm";
 import { extractImports, extractRoutes, extractSymbols, extractTables, markdownSections, nameVariants, parseCompose, parseFrontMatter, parseOpenApi, parseTerraform, tableRefs } from "./parse";
 import { clearProjectGraph, GraphWriter, setEmbedding } from "./store";
 
@@ -390,15 +390,20 @@ export async function ingestProject(projectId: number, onProgress: IngestProgres
   return stats;
 }
 
-/** Embeds documents through the local gateway. Skips quietly when no embedding model is reachable. */
+/**
+ * Stores provider vectors when memory embeddings come from a local provider. With local embeddings
+ * nothing is stored: retrieval builds its TF-IDF hashed index from the documents on demand.
+ */
 export async function embedDocs(projectId: number, limit = 4000): Promise<number> {
-  const rows = getDb().all<{ id: number; title: string; text: string }>("SELECT id, title, text FROM atlas_docs WHERE project_id = ? AND embedding IS NULL LIMIT ?", projectId, limit);
+  const space = currentSpace();
+  if (!space || space.backend !== "provider") return 0;
+  const rows = getDb().all<{ id: number; title: string; text: string }>("SELECT id, title, text FROM atlas_docs WHERE project_id = ? AND (embedding IS NULL OR embedding_space IS NULL OR embedding_space != ?) LIMIT ?", projectId, space.key, limit);
   let done = 0;
   for (let i = 0; i < rows.length; i += 32) {
     const batch = rows.slice(i, i + 32);
-    const vectors = await tryEmbed(batch.map(row => `${row.title}\n${row.text}`.slice(0, 4000)));
-    if (!vectors) return done;
-    batch.forEach((row, j) => vectors[j] && setEmbedding(row.id, vectors[j]));
+    const embedded = await providerEmbed(batch.map(row => `${row.title}\n${row.text}`.slice(0, 4000)));
+    if (!embedded || embedded.space.key !== space.key) return done;
+    batch.forEach((row, j) => setEmbedding(row.id, embedded.vectors[j], space.key));
     done += batch.length;
   }
   return done;

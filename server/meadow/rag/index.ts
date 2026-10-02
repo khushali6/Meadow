@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { getDb } from "../core/db";
 import { containsSecret } from "../core/redact";
-import { getLlm } from "../llm/client";
+import { embeddingRoute } from "../llm/router";
+import { cosine, currentSpace, embedQuery, LOCAL_SPACE, localEmbed, providerEmbed, type EmbeddingSpace } from "../memory/embeddings";
 
 /** Never indexed, regardless of project settings. */
 const PERMANENT_IGNORE = [
@@ -57,18 +58,12 @@ export function chunkText(text: string, maxLines = 60): string[] {
   return chunks.filter(chunk => chunk.trim().length > 20);
 }
 
-async function embedSafely(texts: string[]): Promise<Array<number[] | null>> {
-  if (!texts.length) return [];
-  try {
-    const vectors: number[][] = [];
-    for (let i = 0; i < texts.length; i += 32) vectors.push(...(await getLlm().embed(texts.slice(i, i + 32).map(text => text.slice(0, 4000)))));
-    return vectors;
-  } catch {
-    return texts.map(() => null);
-  }
+function spaceForWrite(embedded: { space: EmbeddingSpace } | null): string | null {
+  if (embedded) return embedded.space.key;
+  return currentSpace()?.backend === "local" ? LOCAL_SPACE.key : null;
 }
 
-export async function indexProject(projectId: number, root: string): Promise<{ files: number; chunks: number; embedded: boolean }> {
+export async function indexProject(projectId: number, root: string): Promise<{ files: number; chunks: number; embedded: boolean; space: string | null }> {
   const db = getDb();
   const files = listProjectFiles(root);
   const rows: Array<{ path: string; text: string }> = [];
@@ -83,62 +78,124 @@ export async function indexProject(projectId: number, root: string): Promise<{ f
       continue;
     }
   }
-  const vectors = await embedSafely(rows.map(row => `${row.path}\n${row.text}`));
+  const embedded = await providerEmbed(rows.map(row => `${row.path}\n${row.text}`));
+  const space = spaceForWrite(embedded);
   db.raw.exec("BEGIN");
   try {
     db.run("DELETE FROM chunks WHERE project_id = ? AND source = 'code'", projectId);
-    rows.forEach((row, i) => db.insert("chunks", { project_id: projectId, source: "code", path: row.path, text: row.text, embedding: vectors[i] ? JSON.stringify(vectors[i]) : null }));
+    rows.forEach((row, i) => db.insert("chunks", { project_id: projectId, source: "code", path: row.path, text: row.text, embedding: embedded ? JSON.stringify(embedded.vectors[i]) : null, embedding_space: space }));
     db.raw.exec("COMMIT");
   } catch (error) {
     db.raw.exec("ROLLBACK");
     throw error;
   }
-  return { files: files.length, chunks: rows.length, embedded: vectors.some(Boolean) };
+  localCache.delete(projectId);
+  return { files: files.length, chunks: rows.length, embedded: Boolean(space), space };
 }
 
 export async function indexMemory(projectId: number, label: string, text: string) {
   if (containsSecret(text)) return;
-  const [vector] = await embedSafely([text]);
-  getDb().insert("chunks", { project_id: projectId, source: "memory", path: label, text, embedding: vector ? JSON.stringify(vector) : null });
+  const embedded = await providerEmbed([text]);
+  getDb().insert("chunks", { project_id: projectId, source: "memory", path: label, text, embedding: embedded ? JSON.stringify(embedded.vectors[0]) : null, embedding_space: spaceForWrite(embedded) });
+  localCache.delete(projectId);
 }
 
-type ChunkRow = { id: number; source: string; path: string; text: string; embedding: string | null };
+type ChunkRow = { id: number; source: string; path: string; text: string; embedding: string | null; embedding_space: string | null };
 export type SearchHit = { path: string; source: string; text: string; score: number };
-
-const cosine = (a: number[], b: number[]) => {
-  let dot = 0, na = 0, nb = 0;
-  for (let i = 0; i < Math.min(a.length, b.length); i++) {
-    dot += a[i] * b[i];
-    na += a[i] * a[i];
-    nb += b[i] * b[i];
-  }
-  return na && nb ? dot / Math.sqrt(na * nb) : 0;
-};
 
 const tokens = (text: string) => text.toLowerCase().split(/[^a-z0-9_]+/).filter(token => token.length > 2);
 
+/** Local vectors are computed from chunk text on demand and cached until the chunk set changes. */
+const localCache = new Map<number, { stamp: string; vectors: Map<number, Float32Array> }>();
+
+function localVectors(projectId: number, rows: ChunkRow[]) {
+  const stamp = `${rows.length}:${rows.reduce((max, row) => Math.max(max, row.id), 0)}`;
+  let cached = localCache.get(projectId);
+  if (!cached || cached.stamp !== stamp) {
+    cached = { stamp, vectors: new Map() };
+    localCache.set(projectId, cached);
+  }
+  for (const row of rows) if (!cached.vectors.has(row.id)) cached.vectors.set(row.id, localEmbed(`${row.path}\n${row.text}`));
+  return cached.vectors;
+}
+
+function keywordRank(rows: ChunkRow[], query: string) {
+  const terms = tokens(query);
+  return rows.map(row => {
+    const haystack = tokens(`${row.path} ${row.text}`);
+    const counts = new Map<string, number>();
+    for (const token of haystack) counts.set(token, (counts.get(token) ?? 0) + 1);
+    const score = terms.reduce((sum, term) => sum + Math.log(1 + (counts.get(term) ?? 0)) + (row.path.toLowerCase().includes(term) ? 1.5 : 0), 0);
+    return { row, score };
+  }).filter(hit => hit.score > 0).sort((a, b) => b.score - a.score);
+}
+
+async function vectorRank(projectId: number, rows: ChunkRow[], query: string) {
+  const space = currentSpace();
+  if (space?.backend === "provider") {
+    const matching = rows.filter(row => row.embedding && row.embedding_space === space.key);
+    if (matching.length >= rows.length / 2) {
+      const queryVector = await embedQuery(query, space);
+      if (queryVector) return matching.map(row => ({ row, score: cosine(queryVector, JSON.parse(row.embedding!) as number[]) })).sort((a, b) => b.score - a.score);
+    }
+  }
+  const vectors = localVectors(projectId, rows);
+  const queryVector = localEmbed(query);
+  return rows.map(row => ({ row, score: cosine(queryVector, vectors.get(row.id)!) })).filter(hit => hit.score > 0.05).sort((a, b) => b.score - a.score);
+}
+
+/** Hybrid search: reciprocal rank fusion of keyword and vector rankings. Vectors come from the current embedding space only. */
 export async function search(projectId: number, query: string, limit = 6, source?: "code" | "memory"): Promise<SearchHit[]> {
   const rows = source
-    ? getDb().all<ChunkRow>("SELECT id, source, path, text, embedding FROM chunks WHERE project_id = ? AND source = ?", projectId, source)
-    : getDb().all<ChunkRow>("SELECT id, source, path, text, embedding FROM chunks WHERE project_id = ?", projectId);
-  if (!rows.length) return [];
-  const embedded = rows.filter(row => row.embedding);
-  let scored: SearchHit[] = [];
-  if (embedded.length > rows.length / 2) {
-    const [queryVector] = await embedSafely([query]);
-    if (queryVector) scored = embedded.map(row => ({ path: row.path, source: row.source, text: row.text, score: cosine(queryVector, JSON.parse(row.embedding!)) }));
+    ? getDb().all<ChunkRow>("SELECT id, source, path, text, embedding, embedding_space FROM chunks WHERE project_id = ? AND source = ?", projectId, source)
+    : getDb().all<ChunkRow>("SELECT id, source, path, text, embedding, embedding_space FROM chunks WHERE project_id = ?", projectId);
+  if (!rows.length || !query.trim()) return [];
+  const fused = new Map<number, { row: ChunkRow; score: number }>();
+  const add = (ranked: Array<{ row: ChunkRow }>) => ranked.slice(0, 50).forEach((hit, rank) => {
+    const entry = fused.get(hit.row.id) ?? { row: hit.row, score: 0 };
+    entry.score += 1 / (60 + rank);
+    fused.set(hit.row.id, entry);
+  });
+  add(keywordRank(rows, query));
+  add(await vectorRank(projectId, rows, query));
+  return Array.from(fused.values()).sort((a, b) => b.score - a.score).slice(0, limit).map(({ row, score }) => ({ path: row.path, source: row.source, text: row.text, score: Number(score.toFixed(4)) }));
+}
+
+export type MemoryStatus = { space: EmbeddingSpace | null; blockedReason: string | null; chunks: number; current: number; stale: number; spaces: Array<{ space: string; chunks: number }> };
+
+/** How many chunks were embedded in the current space. Anything else is stale and needs a re-embed. */
+export function memoryStatus(projectId: number): MemoryStatus {
+  const space = currentSpace();
+  const route = embeddingRoute();
+  const spaces = getDb().all<{ space: string | null; chunks: number }>("SELECT embedding_space AS space, COUNT(*) AS chunks FROM chunks WHERE project_id = ? GROUP BY embedding_space", projectId).map(row => ({ space: row.space ?? "none", chunks: row.chunks }));
+  const chunks = spaces.reduce((sum, row) => sum + row.chunks, 0);
+  const current = space ? spaces.find(row => row.space === space.key)?.chunks ?? 0 : 0;
+  return { space, blockedReason: route.mode === "blocked" ? route.reason : null, chunks, current, stale: chunks - current, spaces };
+}
+
+/** Recompute vectors for stale chunks, then swap them in one transaction. Search keeps working on the old vectors until then. */
+export async function reembed(projectId: number): Promise<{ updated: number; space: string | null; failed: boolean }> {
+  const space = currentSpace();
+  if (!space) return { updated: 0, space: null, failed: true };
+  const db = getDb();
+  const stale = db.all<ChunkRow>("SELECT id, source, path, text, embedding, embedding_space FROM chunks WHERE project_id = ? AND (embedding_space IS NULL OR embedding_space != ?)", projectId, space.key);
+  if (!stale.length) return { updated: 0, space: space.key, failed: false };
+  let vectors: number[][] | null = null;
+  if (space.backend === "provider") {
+    const embedded = await providerEmbed(stale.map(row => `${row.path}\n${row.text}`));
+    if (!embedded || embedded.space.key !== space.key) return { updated: 0, space: space.key, failed: true };
+    vectors = embedded.vectors;
   }
-  if (!scored.length) {
-    const terms = tokens(query);
-    scored = rows.map(row => {
-      const haystack = tokens(`${row.path} ${row.text}`);
-      const counts = new Map<string, number>();
-      for (const token of haystack) counts.set(token, (counts.get(token) ?? 0) + 1);
-      const score = terms.reduce((sum, term) => sum + Math.log(1 + (counts.get(term) ?? 0)) + (row.path.toLowerCase().includes(term) ? 1.5 : 0), 0);
-      return { path: row.path, source: row.source, text: row.text, score };
-    }).filter(hit => hit.score > 0);
+  db.raw.exec("BEGIN");
+  try {
+    stale.forEach((row, i) => db.run("UPDATE chunks SET embedding = ?, embedding_space = ? WHERE id = ?", vectors ? JSON.stringify(vectors[i]) : null, space.key, row.id));
+    db.raw.exec("COMMIT");
+  } catch (error) {
+    db.raw.exec("ROLLBACK");
+    throw error;
   }
-  return scored.sort((a, b) => b.score - a.score).slice(0, limit);
+  localCache.delete(projectId);
+  return { updated: stale.length, space: space.key, failed: false };
 }
 
 /** Context block for prompts: top snippets if indexed, otherwise a file list. */

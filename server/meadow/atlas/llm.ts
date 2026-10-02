@@ -51,15 +51,5 @@ export async function tryJson<T>(messages: ChatMessage[], usage: LlmUsage, valid
   }
 }
 
-export async function tryEmbed(texts: string[]): Promise<number[][] | null> {
-  if (!llmAvailable()) return null;
-  try {
-    return await getLlm().embed(texts);
-  } catch (error) {
-    if (!(error instanceof LlmError && error.type === "UNSUPPORTED")) noteFailure(error);
-    return null;
-  }
-}
-
 /** Rough token estimate used for budget reporting when the gateway does not return usage. */
 export const approxTokens = (text: string) => Math.ceil(text.length / 4);

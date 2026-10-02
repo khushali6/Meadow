@@ -4,6 +4,7 @@ import { getProject } from "../projects";
 import { investigate, type Evidence, type Mode } from "./agents";
 import { ACMEPAY_EVAL, type EvalCase } from "./demo";
 import { llmAvailable } from "./llm";
+import { currentSpace } from "../memory/embeddings";
 import { allEmbeddings } from "./store";
 
 export type ModeScore = { recall5: number; recall10: number; mrr: number; ndcg10: number; faithfulness: number; citationAccuracy: number; answerHit: number; latencyMs: number; p95Ms: number; tokens: number };
@@ -50,7 +51,7 @@ export async function runEval(projectId: number, options: { modes?: Mode[]; onPr
   const cases = loadEvalCases(projectId);
   if (!cases.length) throw new Error("No benchmark found. Add .atlas/eval.json to the project (see `meadow atlas demo`).");
   const modes = options.modes ?? EVAL_MODES;
-  const report: EvalReport = { project: getProject(projectId).name, cases: cases.length, generatedAt: new Date().toISOString(), llm: llmAvailable(), vectorBackend: allEmbeddings(projectId).length ? "gateway" : "hashed", modes: {}, perCase: [] };
+  const report: EvalReport = { project: getProject(projectId).name, cases: cases.length, generatedAt: new Date().toISOString(), llm: llmAvailable(), vectorBackend: (() => { const space = currentSpace(); return space?.backend === "provider" && allEmbeddings(projectId, space.key).length ? "gateway" : "hashed"; })(), modes: {}, perCase: [] };
   for (const mode of modes) {
     const rows: Array<ModeScore & { ms: number }> = [];
     for (const c of cases) {

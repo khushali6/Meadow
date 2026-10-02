@@ -14,7 +14,9 @@ export function MemoryView({ project }: { project: ProjectSummary | undefined })
   const [query, setQuery] = useState("");
   const [submitted, setSubmitted] = useState("");
   const addNote = trpc.addNote.useMutation({ onSuccess: () => { setTitle(""); setBody(""); utils.notes.invalidate(); } });
-  const reindex = trpc.reindex.useMutation();
+  const status = trpc.memoryStatus.useQuery({ projectId: projectId ?? 0 }, { enabled: Boolean(projectId) });
+  const reindex = trpc.reindex.useMutation({ onSuccess: () => utils.memoryStatus.invalidate() });
+  const reembed = trpc.reembed.useMutation({ onSuccess: () => utils.memoryStatus.invalidate() });
   const results = trpc.search.useQuery({ projectId: projectId ?? 0, query: submitted }, { enabled: Boolean(projectId && submitted) });
 
   return (
@@ -25,8 +27,19 @@ export function MemoryView({ project }: { project: ProjectSummary | undefined })
         description="Notes and project code are indexed locally so prompts get the right context. .env files, keys, and credentials are never indexed."
         action={project ? <MotionButton className="button secondary" disabled={reindex.isPending} onClick={() => reindex.mutate({ projectId: project.id })}><RefreshCw size={15} className={reindex.isPending ? "spin-slow" : undefined} /> {reindex.isPending ? "Indexing…" : "Re-index project"}</MotionButton> : undefined}
       />
-      {reindex.data ? <div className="banner ok"><div><strong>Indexed {reindex.data.files} files into {reindex.data.chunks} chunks</strong><span>{reindex.data.embedded ? "Embeddings were computed on this machine." : "Search uses keyword matching."}</span></div></div> : null}
-      <ErrorNote error={reindex.error ?? addNote.error ?? results.error} />
+      {reindex.data ? <div className="banner ok"><div><strong>Indexed {reindex.data.files} files into {reindex.data.chunks} chunks</strong><span>{reindex.data.embedded ? `Embedding space: ${reindex.data.space}` : "The embedding provider was unavailable, so these chunks are stale. Search uses keywords and local vectors until you re-embed."}</span></div></div> : null}
+      {status.data ? (
+        <div className="memory-status" aria-label="Embedding status">
+          <span className="capability-kind">{status.data.space ? status.data.space.backend : "blocked"}</span>
+          <span><strong>Embeddings</strong> {status.data.space ? `${status.data.space.provider} · ${status.data.space.model}` : status.data.blockedReason}</span>
+          <span><strong>{status.data.current}</strong> / {status.data.chunks} chunks current</span>
+          {status.data.stale > 0 ? <span className="status-tag paused"><span />{status.data.stale} stale</span> : status.data.chunks ? <span className="status-tag passed"><span />Up to date</span> : <span className="status-tag queued"><span />Not indexed</span>}
+          {status.data.stale > 0 && status.data.space ? <MotionButton className="button secondary" disabled={reembed.isPending} onClick={() => project && reembed.mutate({ projectId: project.id })}><RefreshCw size={14} className={reembed.isPending ? "spin-slow" : undefined} /> {reembed.isPending ? "Re-embedding…" : "Re-embed stale chunks"}</MotionButton> : null}
+          <em>Stored only in ~/.meadow. Vectors from different models are never mixed.</em>
+        </div>
+      ) : null}
+      {reembed.data?.failed ? <div className="banner warn"><div><strong>Re-embedding didn't run</strong><span>The embedding provider is unreachable. The old vectors are still in use; try again once it's running.</span></div></div> : null}
+      <ErrorNote error={reindex.error ?? reembed.error ?? addNote.error ?? results.error} />
       <div className="memory-layout">
         <section className="panel">
           <div className="panel-heading"><div><span className="panel-kicker">Search</span><h2>Ask the index</h2></div></div>

@@ -243,6 +243,27 @@ const MIGRATIONS: string[] = [
   CREATE INDEX atlas_trace_investigation ON atlas_trace(investigation_id, id);
   CREATE INDEX atlas_investigations_project ON atlas_investigations(project_id, id);
   `,
+  `
+  ALTER TABLE chunks ADD COLUMN embedding_space TEXT;
+  ALTER TABLE atlas_docs ADD COLUMN embedding_space TEXT;
+  UPDATE chunks SET embedding_space = 'legacy' WHERE embedding IS NOT NULL;
+  UPDATE atlas_docs SET embedding_space = 'legacy' WHERE embedding IS NOT NULL;
+  CREATE TABLE audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    project_id INTEGER,
+    agent TEXT NOT NULL,
+    user TEXT NOT NULL,
+    tool TEXT NOT NULL,
+    risk TEXT NOT NULL,
+    args_hash TEXT NOT NULL,
+    approval TEXT NOT NULL,
+    result TEXT NOT NULL,
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    detail TEXT NOT NULL DEFAULT ''
+  );
+  CREATE INDEX audit_log_project ON audit_log(project_id, id);
+  `,
 ];
 
 export type Row = Record<string, SQLInputValue>;

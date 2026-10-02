@@ -182,10 +182,11 @@ export function graphStats(projectId: number) {
   return { nodes: Object.fromEntries(nodes.map(row => [row.kind, row.n])), edges, docs: docs?.n ?? 0, embedded: docs?.e ?? 0, lastIngest: ingest ? { at: ingest.finished_at, ...JSON.parse(ingest.stats_json) } : null };
 }
 
-export function setEmbedding(docId: number, vector: number[]) {
-  getDb().run("UPDATE atlas_docs SET embedding = ? WHERE id = ?", new Uint8Array(new Float32Array(vector).buffer), docId);
+export function setEmbedding(docId: number, vector: number[], space: string) {
+  getDb().run("UPDATE atlas_docs SET embedding = ?, embedding_space = ? WHERE id = ?", new Uint8Array(new Float32Array(vector).buffer), space, docId);
 }
 
-export function allEmbeddings(projectId: number): Array<{ id: number; vector: Float32Array }> {
-  return getDb().all<{ id: number; embedding: Uint8Array }>("SELECT id, embedding FROM atlas_docs WHERE project_id = ? AND embedding IS NOT NULL", projectId).map(row => ({ id: row.id, vector: new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4) }));
+/** Stored vectors from one embedding space. Vectors from other spaces are never mixed into a search. */
+export function allEmbeddings(projectId: number, space: string): Array<{ id: number; vector: Float32Array }> {
+  return getDb().all<{ id: number; embedding: Uint8Array }>("SELECT id, embedding FROM atlas_docs WHERE project_id = ? AND embedding IS NOT NULL AND embedding_space = ?", projectId, space).map(row => ({ id: row.id, vector: new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4) }));
 }

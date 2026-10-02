@@ -1,6 +1,7 @@
 import { getDb } from "../core/db";
 import { loadConfig } from "../config";
-import { llmAvailable, tryEmbed, tryJson, type LlmUsage } from "./llm";
+import { currentSpace, embedQuery } from "../memory/embeddings";
+import { llmAvailable, tryJson, type LlmUsage } from "./llm";
 import { nameVariants } from "./parse";
 import { allEmbeddings, edgesOf, getNode, visibleAt, type AtlasNode, type NodeKind } from "./store";
 
@@ -187,12 +188,13 @@ const dot = (a: Float32Array, b: Float32Array | number[]) => {
 };
 
 async function vector(projectId: number, query: string, k: number): Promise<{ ranked: Ranked; backend: RetrievalResult["vectorBackend"] }> {
-  const stored = allEmbeddings(projectId);
-  if (stored.length) {
-    const embedded = await tryEmbed([query]);
-    if (embedded?.[0]?.length === stored[0].vector.length) {
+  const space = currentSpace();
+  const stored = space?.backend === "provider" ? allEmbeddings(projectId, space.key) : [];
+  if (space && stored.length) {
+    const embedded = await embedQuery(query, space);
+    if (embedded?.length === stored[0].vector.length) {
       const nodeOf = new Map(getDb().all<{ id: number; node_id: number | null }>("SELECT id, node_id FROM atlas_docs WHERE project_id = ? AND embedding IS NOT NULL", projectId).map(row => [row.id, row.node_id]));
-      const ranked = stored.map(row => ({ id: row.id, score: dot(row.vector, embedded[0]) })).sort((a, b) => b.score - a.score).slice(0, k * 3);
+      const ranked = stored.map(row => ({ id: row.id, score: dot(row.vector, Array.from(embedded)) })).sort((a, b) => b.score - a.score).slice(0, k * 3);
       return { ranked: ranked.map(row => docRef({ id: row.id, node_id: nodeOf.get(row.id) ?? null })), backend: "gateway" };
     }
   }

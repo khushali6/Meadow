@@ -791,3 +791,6 @@ button.cite-chip:hover { background: var(--sun); }
 .capability.yes { color: #3f6b41; border-color: #9fbea0; }
 .capability.no { color: var(--muted); opacity: .7; text-decoration: line-through; }
 .doctor-foot { padding: 6px 2px 0; color: var(--muted); font: 9px ui-monospace, monospace; text-transform: uppercase; }
+.memory-status { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 10px 14px; margin-bottom: 14px; border: 1px solid var(--ink); background: var(--paper); font-size: 11px; }
+.memory-status strong { font-weight: 700; }
+.memory-status em { flex-basis: 100%; color: var(--muted); font: 9px ui-monospace, monospace; font-style: normal; text-transform: uppercase; }

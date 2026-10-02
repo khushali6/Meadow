@@ -17,7 +17,9 @@ import { handleAction, handleText } from "./meadow/intake/conversation";
 import { improvePlan } from "./meadow/intake/llm";
 import { parsePlan } from "./meadow/planning/format";
 import { addNote, approvePlan, createProject, getPlan, getProject, savePlanVersion, updateProject } from "./meadow/projects";
-import { indexMemory, indexProject, search } from "./meadow/rag/index";
+import { embedDocs } from "./meadow/atlas/ingest";
+import { bus } from "./meadow/core/events";
+import { indexMemory, indexProject, memoryStatus, reembed, search } from "./meadow/rag/index";
 import { exportBundle, notesFor, phaseDiff, phaseEvidence, planHistory, projectDetail, projectsOverview, usageToday } from "./meadow/service";
 import { captureOnDemand } from "./meadow/visual/ondemand";
 
@@ -160,6 +162,13 @@ export const appRouter = router({
   }),
   search: publicProcedure.input(z.object({ projectId: z.number(), query: z.string().min(1).max(500) })).query(({ input }) => search(input.projectId, input.query, 10)),
   reindex: publicProcedure.input(z.object({ projectId: z.number() })).mutation(({ input }) => indexProject(input.projectId, getProject(input.projectId).path)),
+  memoryStatus: publicProcedure.input(z.object({ projectId: z.number() })).query(({ input }) => memoryStatus(input.projectId)),
+  reembed: publicProcedure.input(z.object({ projectId: z.number() })).mutation(async ({ input }) => {
+    const chunks = await reembed(input.projectId);
+    const atlasDocs = await embedDocs(input.projectId);
+    bus.emitEvent({ projectId: input.projectId, type: "memory", title: chunks.failed ? "Re-embedding failed: embedding provider unavailable" : `Re-embedded ${chunks.updated} chunks and ${atlasDocs} CodeAtlas documents`, detail: chunks.space ?? "", payload: { space: chunks.space, chunks: chunks.updated, atlasDocs } });
+    return { ...chunks, atlasDocs };
+  }),
   shot: publicProcedure.input(z.object({ projectId: z.number(), route: z.string().nullable() })).mutation(({ input }) => captureOnDemand(input.projectId, input.route)),
 
   chat: publicProcedure.input(z.object({ text: z.string().min(1).max(100_000) })).mutation(({ input }) => handleText(DASHBOARD.channel, DASHBOARD.chat, input.text)),
