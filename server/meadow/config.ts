@@ -119,4 +119,5 @@ export function setSecret(name: SecretName, value: string) {
   fs.mkdirSync(meadowHome(), { recursive: true, mode: 0o700 });
   const body = Object.entries(secrets).map(([key, val]) => `${key}=${val}`).join("\n") + "\n";
   fs.writeFileSync(homePath("secrets.env"), body, { mode: 0o600 });
+  fs.chmodSync(homePath("secrets.env"), 0o600);
 }

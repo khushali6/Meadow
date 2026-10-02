@@ -14,7 +14,7 @@ export type FakeScript = (req: RunRequest, call: number) => FakeStep[];
 
 /** Default behaviour: satisfy `file_exists` checks mentioned in the prompt and leave a note file. */
 export const defaultFakeScript: FakeScript = (req, call) => {
-  const files = Array.from(req.prompt.matchAll(/file exists: ([^\s`]+)/g)).map(match => match[1]);
+  const files = Array.from(req.prompt.matchAll(/file exists: ([^\s`]+)/g)).map(match => match[1].replace(/[.,;:)]+$/, ""));
   const phase = req.prompt.match(/# This phase: (.+)/)?.[1]?.trim() ?? "phase";
   const steps: FakeStep[] = [
     { event: { type: "session_started", title: "Fake engine session started", sessionId: `fake-${req.runId}` } },

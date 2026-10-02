@@ -11,7 +11,7 @@ import { improvePlan } from "./meadow/intake/llm";
 import { parsePlan } from "./meadow/planning/format";
 import { addNote, approvePlan, createProject, getPlan, getProject, savePlanVersion, updateProject } from "./meadow/projects";
 import { indexMemory, indexProject, search } from "./meadow/rag/index";
-import { notesFor, phaseDiff, phaseEvidence, planHistory, projectDetail, projectsOverview, usageToday } from "./meadow/service";
+import { exportBundle, notesFor, phaseDiff, phaseEvidence, planHistory, projectDetail, projectsOverview, usageToday } from "./meadow/service";
 import { captureOnDemand } from "./meadow/visual/ondemand";
 
 const DASHBOARD = { channel: "dashboard", chat: "local" } as const;
@@ -119,6 +119,7 @@ export const appRouter = router({
     return safeSettings();
   }),
   pairTelegram: publicProcedure.mutation(() => ({ code: createPairingCode(), bot: telegram.status().bot })),
+  exportRun: publicProcedure.input(z.object({ projectId: z.number() })).mutation(({ input }) => exportBundle(input.projectId)),
   doctor: publicProcedure.query(() => fullDoctor()),
   llmStatus: publicProcedure.query(() => llmStatus()),
 });

@@ -133,3 +133,18 @@ export function usageToday() {
   const today = new Date().toISOString().slice(0, 10);
   return getDb().get<{ tokens: number; cost: number; runs: number }>("SELECT COALESCE(SUM(tokens_in + tokens_out), 0) AS tokens, COALESCE(SUM(cost_usd), 0) AS cost, COUNT(*) AS runs FROM runs WHERE started_at >= ?", today)!;
 }
+
+export function exportBundle(projectId: number) {
+  const project = getProject(projectId);
+  const db = getDb();
+  return {
+    exportedAt: new Date().toISOString(),
+    project,
+    plans: db.all("SELECT * FROM plans WHERE project_id = ?", project.id),
+    phases: db.all("SELECT phases.* FROM phases JOIN plans ON plans.id = phases.plan_id WHERE plans.project_id = ?", project.id),
+    executions: db.all("SELECT * FROM executions WHERE project_id = ?", project.id),
+    runs: db.all("SELECT runs.* FROM runs JOIN executions ON executions.id = runs.execution_id WHERE executions.project_id = ?", project.id),
+    checks: db.all("SELECT checks.* FROM checks JOIN phases ON phases.id = checks.phase_id JOIN plans ON plans.id = phases.plan_id WHERE plans.project_id = ?", project.id),
+    events: db.all("SELECT * FROM events WHERE project_id = ?", project.id),
+  };
+}

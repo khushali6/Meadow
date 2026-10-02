@@ -34,7 +34,7 @@ function consumePairingCode(text: string): boolean {
     setSetting("telegram_pairing", null);
     return false;
   }
-  const candidate = text.replace(/^\/start\s*/, "").trim();
+  const candidate = text.replace(/^\/(start|pair)\s*/, "").trim();
   if (!/^\d{6}$/.test(candidate)) return false;
   const ok = crypto.timingSafeEqual(Buffer.from(hash), Buffer.from(crypto.createHash("sha256").update(candidate).digest("hex")));
   if (ok) setSetting("telegram_pairing", null);

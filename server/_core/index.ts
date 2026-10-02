@@ -21,6 +21,7 @@ function sessionToken(): string {
   fs.mkdirSync(meadowHome(), { recursive: true, mode: 0o700 });
   const token = crypto.randomBytes(24).toString("base64url");
   fs.writeFileSync(homePath("session-token"), token, { mode: 0o600 });
+  fs.chmodSync(homePath("session-token"), 0o600);
   return token;
 }
 
@@ -50,6 +51,7 @@ export async function startDaemon(options: { port?: number; dev?: boolean } = {}
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Referrer-Policy", "no-referrer");
     res.setHeader("X-Frame-Options", "DENY");
+    if (!options.dev) res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
     next();
   });
   app.use(express.json({ limit: "2mb" }));

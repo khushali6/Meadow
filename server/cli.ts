@@ -9,7 +9,7 @@ import { fullDoctor, llmStatus } from "./meadow/doctor";
 import { harness } from "./meadow/harness/runner";
 import { formatErrors, parsePlan } from "./meadow/planning/format";
 import { approvePlan, createProject, findProject, getProject, savePlanVersion } from "./meadow/projects";
-import { statusText } from "./meadow/service";
+import { exportBundle, statusText } from "./meadow/service";
 
 const HELP = `meadow — local-first agent that builds and tests code phase by phase
 
@@ -124,19 +124,8 @@ async function runPlanFile(file: string, args: string[]) {
 
 function exportRun(name: string, out?: string) {
   const project = getProject(name);
-  const db = getDb();
-  const bundle = {
-    exportedAt: new Date().toISOString(),
-    project,
-    plans: db.all("SELECT * FROM plans WHERE project_id = ?", project.id),
-    phases: db.all("SELECT phases.* FROM phases JOIN plans ON plans.id = phases.plan_id WHERE plans.project_id = ?", project.id),
-    executions: db.all("SELECT * FROM executions WHERE project_id = ?", project.id),
-    runs: db.all("SELECT runs.* FROM runs JOIN executions ON executions.id = runs.execution_id WHERE executions.project_id = ?", project.id),
-    checks: db.all("SELECT checks.* FROM checks JOIN phases ON phases.id = checks.phase_id JOIN plans ON plans.id = phases.plan_id WHERE plans.project_id = ?", project.id),
-    events: db.all("SELECT * FROM events WHERE project_id = ?", project.id),
-  };
   const file = out ?? `${project.name}-run-export.json`;
-  fs.writeFileSync(file, JSON.stringify(bundle, null, 2));
+  fs.writeFileSync(file, JSON.stringify(exportBundle(project.id), null, 2));
   console.log(`Wrote ${file}`);
 }
 

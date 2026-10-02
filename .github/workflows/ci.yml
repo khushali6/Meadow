@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: [22, 24]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: git config --global user.email ci@example.com && git config --global user.name CI
+      - run: pnpm check
+      - run: pnpm test
+      - run: pnpm build
+      - name: Smoke test the built CLI with the fake engine
+        env:
+          MEADOW_HOME: ${{ runner.temp }}/meadow-home
+          MEADOW_PROJECTS_DIR: ${{ runner.temp }}/meadow-projects
+          MEADOW_ENGINE: fake
+        run: |
+          node dist/cli.js plan validate examples/PLAN.md
+          node dist/cli.js version
+          node dist/cli.js run examples/DEMO-PLAN.md
+          node dist/cli.js status demo | grep "2/2 phases passed"
