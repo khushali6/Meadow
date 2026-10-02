@@ -936,6 +936,9 @@ button.cite-chip:hover { background: var(--sun); }
 .provider-block:last-child { border-bottom: 0; }
 .provider-block .provider-scan-row { border-bottom: 0; }
 .provider-block.recommended { box-shadow: inset 2px 0 0 var(--sun); }
+.engine-pick { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.engine-pick input { accent-color: var(--sun); margin: 0; }
+.provider-detail a { color: var(--ink); font-weight: 600; }
 .provider-detail { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 0 14px 12px; }
 .provider-detail .welcome-note { flex-basis: 100%; font-size: 12px; }
 .provider-detail .prompt-label { display: flex; align-items: center; gap: 8px; font: 11px var(--mono); color: var(--muted); }

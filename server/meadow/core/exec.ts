@@ -1,4 +1,7 @@
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import crossSpawn from "cross-spawn";
 
 export const isWindows = process.platform === "win32";
@@ -119,6 +122,40 @@ export function which(binary: string): Promise<string | null> {
       resolve(runnable ?? lines[0]);
     });
   });
+}
+
+/** Per-user and package-manager bin folders that a daemon started from a desktop launcher often lacks on PATH. */
+export function extraBinDirs(): string[] {
+  const home = os.homedir();
+  if (isWindows) {
+    const local = process.env.LOCALAPPDATA ?? path.join(home, "AppData", "Local");
+    const roaming = process.env.APPDATA ?? path.join(home, "AppData", "Roaming");
+    return [path.join(local, "cursor-agent"), path.join(local, "Programs", "cursor-agent"), path.join(roaming, "npm"), path.join(local, "pnpm"), path.join(home, ".bun", "bin"), path.join(home, ".local", "bin")];
+  }
+  return [path.join(home, ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin", path.join(home, ".npm-global", "bin"), path.join(home, ".bun", "bin"), path.join(home, ".volta", "bin"), path.join(home, "Library", "pnpm"), path.join(home, ".local", "share", "pnpm"), path.join(home, ".claude", "local")];
+}
+
+/** The first of `names` on PATH, else in a well-known install folder. */
+export async function findBinary(names: string[]): Promise<string | null> {
+  for (const name of names) {
+    const found = await which(name);
+    if (found) return found;
+  }
+  const suffixes = isWindows ? [".exe", ".cmd", ".bat"] : [""];
+  for (const dir of extraBinDirs()) {
+    for (const name of names) {
+      for (const suffix of suffixes) {
+        const candidate = path.join(dir, name + suffix);
+        try {
+          fs.accessSync(candidate, isWindows ? fs.constants.F_OK : fs.constants.X_OK);
+          if (fs.statSync(candidate).isFile()) return candidate;
+        } catch {
+          // Not here.
+        }
+      }
+    }
+  }
+  return null;
 }
 
 export function capture(command: string, args: string[], options: { cwd?: string; timeoutMs?: number; env?: NodeJS.ProcessEnv; input?: string } = {}): Promise<{ code: number | null; stdout: string; stderr: string }> {

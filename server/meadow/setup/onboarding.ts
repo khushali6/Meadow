@@ -15,7 +15,7 @@ import { detectProject, type ProjectProfile } from "./detect";
 import { liveGraph } from "./live";
 import { baselineOf, type Baseline } from "./verify";
 
-export const ONBOARDING_STEPS = ["environment", "repository", "llm", "codeatlas", "memory", "mcp", "telegram", "plan", "verify"] as const;
+export const ONBOARDING_STEPS = ["environment", "repository", "engine", "llm", "codeatlas", "memory", "mcp", "telegram", "plan", "verify"] as const;
 export type OnboardingStepId = (typeof ONBOARDING_STEPS)[number];
 export type StepState = { status: "pending" | "running" | "done" | "skipped" | "failed"; detail: string; at: string };
 export type OnboardingState = { projectId: number | null; completedAt: string | null; steps: Partial<Record<OnboardingStepId, StepState>> };

@@ -16,6 +16,7 @@ import { projectBrief } from "../brief/brief";
 import { projectStatus } from "../brief/next";
 import { liveGraph } from "../setup/live";
 import { preflightImpact } from "../setup/preflight";
+import { assertEngineReady } from "../setup/engines";
 import { autoChecks } from "../setup/verify";
 import { runGuards } from "./guards";
 import { compileFixPrompt, compilePhasePrompt, rulesFileContent } from "./prompts";
@@ -58,18 +59,7 @@ const RESUMABLE: ExecutionStatus[] = ["paused", "waiting", "blocked", "interrupt
 const SPECIFIC_FAILURES = new Set(["auth", "missing_binary", "model_unavailable", "rate_limited"]);
 
 export function engineLoginHint(engine: string): string {
-  switch (engine) {
-    case "cursor":
-      return "Run `agent login` in a terminal (or put CURSOR_API_KEY in ~/.meadow/secrets.env)";
-    case "claude_code":
-      return "Run `claude` in a terminal and log in (or put ANTHROPIC_API_KEY in ~/.meadow/secrets.env)";
-    case "codex":
-      return "Run `codex login` in a terminal (or put OPENAI_API_KEY in ~/.meadow/secrets.env)";
-    case "gemini":
-      return "Run `gemini` in a terminal and sign in (or put GEMINI_API_KEY in ~/.meadow/secrets.env)";
-    default:
-      return "Log the engine in (run `meadow doctor` for details)";
-  }
+  return engine === "custom" || engine === "fake" ? "Check the engine with `meadow doctor`" : "Open Setup → Coding engine and click Connect (or save an API key there)";
 }
 
 /** One engine run at a time across all projects; other projects queue. */
@@ -141,6 +131,8 @@ export class Harness {
     if (!active) throw new Error("This project has no approved plan yet. Create or import a plan and approve it first.");
     const engineName = options.engine ?? project.engine;
     assertSelectableEngine(engineName);
+    await assertEngineReady(engineName);
+    if (this.active.has(projectId)) return this.active.get(projectId)!.executionId;
     const engine = getEngine(engineName);
     const previous = this.latestExecution(projectId);
     let executionId: number;

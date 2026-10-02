@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getSecret } from "../config";
-import { capture, minimalEnv, which } from "../core/exec";
+import { capture, findBinary, minimalEnv } from "../core/exec";
 import { failureReason, type DoctorReport, type Engine, type EngineEvent, type RunRequest } from "./base";
 import { Supervisor } from "./supervisor";
 
@@ -67,7 +67,7 @@ export class CodexEngine implements Engine {
   private flags: Record<string, boolean> | null = null;
 
   private async binary() {
-    return process.env.MEADOW_CODEX_BIN || (await which("codex"));
+    return process.env.MEADOW_CODEX_BIN || (await findBinary(["codex"]));
   }
 
   private async detectFlags(binary: string) {

@@ -40,11 +40,13 @@ import { diagnose, diagnoseAndRepair } from "./meadow/setup/health";
 import { liveGraph } from "./meadow/setup/live";
 import { discoverMcp, EXTERNAL_POLICY, importMcp, mcpCapabilities, removeMcp } from "./meadow/setup/mcp";
 import { buildKnowledge, completeOnboarding, generateInitialPlan, markStep, ONBOARDING_STEPS, onboardingState, registerRepository, resetOnboarding } from "./meadow/setup/onboarding";
+import { assertEngineReady, cancelEngineJob, connectEngine, installEngine, saveEngineKey, scanEngines, selectEngine } from "./meadow/setup/engines";
 import { saveProviderKey, scanProviders, useProvider } from "./meadow/setup/providers";
 import { baselineOf, runBaseline } from "./meadow/setup/verify";
 
 const DASHBOARD = { channel: "dashboard", chat: "local" } as const;
 
+const engineId = z.enum(["cursor", "codex", "gemini", "claude_code"]);
 const providerId = z.enum(["freellmapi", "openai", "gemini", "anthropic", "openrouter", "ollama", "lmstudio", "custom"]);
 const providerSettings = z.object({ baseUrl: z.string().url().max(300), model: z.string().max(200), embeddingModel: z.string().max(200), transcriptionModel: z.string().max(200) }).partial();
 
@@ -183,6 +185,17 @@ const setupRouter = router({
     markStep("repository", "done", `${result.project.name} at ${result.project.path} (new)`, result.project.id);
     return { project: result.project };
   }),
+  engines: publicProcedure.query(() => scanEngines()),
+  connectEngine: publicProcedure.input(z.object({ engine: engineId })).mutation(({ input }) => connectEngine(input.engine)),
+  installEngine: publicProcedure.input(z.object({ engine: engineId })).mutation(({ input }) => installEngine(input.engine)),
+  cancelEngineJob: publicProcedure.input(z.object({ engine: engineId })).mutation(({ input }) => cancelEngineJob(input.engine)),
+  saveEngineKey: publicProcedure.input(z.object({ engine: engineId, key: z.string().min(8).max(500) })).mutation(({ input }) => saveEngineKey(input.engine, input.key)),
+  selectEngine: publicProcedure.input(z.object({ engine: engineId })).mutation(async ({ input }) => {
+    const result = selectEngine(input.engine, onboardingState().projectId);
+    const engine = (await scanEngines()).engines.find(item => item.name === input.engine);
+    markStep("engine", engine?.ready ? "done" : "failed", engine?.ready ? `${engine.label}${engine.version ? ` ${engine.version}` : ""} · ${engine.detail}` : engine?.detail ?? "Not connected");
+    return { ...result, ready: Boolean(engine?.ready) };
+  }),
   providers: publicProcedure.query(() => scanProviders()),
   saveKey: publicProcedure.input(z.object({ provider: providerId, key: z.string().min(8).max(500) })).mutation(({ input }) => {
     saveProviderKey(input.provider, input.key);
@@ -267,6 +280,7 @@ export const appRouter = router({
   }),
   savePlan: publicProcedure.input(z.object({ projectId: z.number(), markdown: z.string().max(500_000) })).mutation(({ input }) => savePlanVersion(input.projectId, input.markdown, { source: "user" })),
   approvePlan: publicProcedure.input(z.object({ planId: z.number(), start: z.boolean().default(true) })).mutation(async ({ input }) => {
+    if (input.start) await assertEngineReady(getProject(getPlan(input.planId).project_id).engine);
     const plan = await approvePlan(input.planId);
     if (input.start) await harness.start(plan.project_id);
     return plan;

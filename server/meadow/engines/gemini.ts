@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { getSecret } from "../config";
-import { capture, which } from "../core/exec";
+import { capture, findBinary } from "../core/exec";
 import { failureReason, type DoctorReport, type Engine, type EngineEvent, type RunRequest } from "./base";
 import { Supervisor } from "./supervisor";
 
@@ -72,7 +72,7 @@ export class GeminiEngine implements Engine {
   private flags: Record<string, boolean> | null = null;
 
   private async binary() {
-    return process.env.MEADOW_GEMINI_BIN || (await which("gemini"));
+    return process.env.MEADOW_GEMINI_BIN || (await findBinary(["gemini"]));
   }
 
   private async detectFlags(binary: string) {

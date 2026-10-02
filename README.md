@@ -23,11 +23,11 @@ The agent's own thinking (clarifying questions, specs, plans, summaries) uses th
 - Node.js 22.16+ or 24+ (Meadow uses the built-in `node:sqlite` with full-text search; Node 23 and earlier 22.x releases don't ship it). The `meadow` command checks this first and tells you what to install.
 - git
 - A model provider for the agent (see [Agent model providers](#agent-model-providers)): a local gateway (FreeLLMAPI, Ollama, LM Studio) or a key for OpenAI, Anthropic, Gemini, OpenRouter or any OpenAI-compatible API
-- At least one coding engine:
-  - Cursor CLI (`cursor-agent`), logged in with `cursor-agent login`
+- At least one coding engine. Setup's **Coding engine** step finds what's installed (also in `~/.local/bin`, Homebrew, npm and pnpm folders that a desktop-launched Meadow may not have on PATH), notes desktop apps such as Cursor or VS Code, and lets you pick one. **Connect** runs the engine's own browser sign-in and finishes on its own; **Install** runs the vendor's install command, only when you click it; or paste the engine's API key. Runs refuse to start until the chosen engine is installed and signed in.
+  - Cursor CLI (`cursor-agent` / `agent`): Install and Connect from Setup, or `CURSOR_API_KEY`
   - Claude Code: coming soon. It shows in the dashboard but can't be selected yet; projects that used it keep their settings and run on your default engine until the adapter ships
-  - Codex CLI (`codex`), logged in with `codex login`
-  - Gemini CLI (`gemini`), signed in or with `GEMINI_API_KEY`
+  - Codex CLI (`codex`): Install and Connect from Setup, or an OpenAI API key
+  - Gemini CLI (`gemini`): Install from Setup, then sign in once by running `gemini`, or paste a `GEMINI_API_KEY`
   - Anything else (aider, opencode, a script) through the custom engine: set `engine.custom.command` in `~/.meadow/config.json`. It receives the prompt as `$MEADOW_PROMPT` and `$MEADOW_PROMPT_FILE` (`%MEADOW_PROMPT_FILE%` on Windows, where the command runs in `cmd.exe`), runs in the project folder, and its exit code decides success.
 - Optional: Playwright + Chromium for screenshots, a Telegram bot token, `piper` + `ffmpeg` for spoken replies, `whisper.cpp` + `ffmpeg` for local voice transcription
 

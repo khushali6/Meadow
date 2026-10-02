@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { engineModel, getSecret, loadConfig } from "../config";
-import { capture, which } from "../core/exec";
+import { capture, findBinary } from "../core/exec";
 import { minimalEnv } from "../core/exec";
 import { failureReason, type DoctorReport, type Engine, type EngineEvent, type RunRequest } from "./base";
 import { Supervisor } from "./supervisor";
@@ -61,7 +61,7 @@ export class ClaudeCodeEngine implements Engine {
   private flags: Record<string, boolean> | null = null;
 
   private async binary() {
-    return process.env.MEADOW_CLAUDE_BIN || (await which("claude"));
+    return process.env.MEADOW_CLAUDE_BIN || (await findBinary(["claude"]));
   }
 
   private async detectFlags(binary: string) {

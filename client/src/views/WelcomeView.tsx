@@ -11,6 +11,7 @@ import type { Overview, Settings } from "../lib/types";
 
 const STEPS = [
   { id: "repository", label: "Repository", title: "Point Meadow at your code." },
+  { id: "engine", label: "Coding engine", title: "Connect the agent that writes the code." },
   { id: "llm", label: "Agent model", title: "Pick the model that plans." },
   { id: "codeatlas", label: "Knowledge", title: "Map the system." },
   { id: "mcp", label: "Tools", title: "Connect the tools you already use." },
@@ -79,6 +80,7 @@ export function WelcomeView({ settings, overview, onNavigate, onProject }: { set
                 <h2>{step.title}</h2>
               </div>
               {step.id === "repository" ? <RepositoryStep suggested={state.data.suggestedPath} projectId={projectId} steps={steps} running={state.data.running} onDone={next} /> : null}
+              {step.id === "engine" ? <EngineStep stepStatus={steps.engine?.status} onDone={next} /> : null}
               {step.id === "llm" ? <ProviderStep stepStatus={steps.llm?.status} onDone={next} onSkip={() => skip("llm")} /> : null}
               {step.id === "codeatlas" ? <KnowledgeStep projectId={projectId} steps={steps} running={state.data.running} onDone={next} /> : null}
               {step.id === "mcp" ? <McpStep projectId={projectId} onDone={() => mark.mutate({ id: "mcp", status: "done", detail: "Reviewed" }, { onSuccess: next })} onSkip={() => skip("mcp")} /> : null}
@@ -106,6 +108,112 @@ type Steps = Partial<Record<string, { status: string; detail: string }>>;
 type SetupOut = inferRouterOutputs<AppRouter>["setup"];
 type ProviderRow = SetupOut["providers"]["providers"][number];
 type Health = SetupOut["useProvider"];
+type EngineRow = SetupOut["engines"]["engines"][number];
+
+function engineTag(engine: EngineRow): { cls: string; text: string } {
+  if (engine.status !== "available") return { cls: "queued", text: "Coming soon" };
+  if (engine.job?.status === "running") return { cls: "running", text: engine.job.kind === "login" ? "Signing in" : "Installing" };
+  if (engine.ready) return { cls: "passed", text: "Ready" };
+  if (engine.installed) return { cls: "paused", text: engine.signedIn ? "Needs attention" : "Not signed in" };
+  return { cls: "queued", text: "Not installed" };
+}
+
+function EngineKeyField({ engine, onSaved }: { engine: EngineRow; onSaved: () => void }) {
+  const [key, setKey] = useState("");
+  const [open, setOpen] = useState(false);
+  const save = trpc.setup.saveEngineKey.useMutation({ onSuccess: () => { setKey(""); setOpen(false); onSaved(); } });
+  if (!engine.key) return null;
+  if (!open) return <span className="welcome-note">{engine.keySet ? <><CheckCircle2 size={12} /> {engine.key} saved · </> : null}<button type="button" className="link-button" onClick={() => setOpen(true)}>{engine.keySet ? "Replace key" : `Use an API key instead (${engine.keyHelp})`}</button></span>;
+  return (
+    <form className="key-field" onSubmit={event => { event.preventDefault(); if (key.trim()) save.mutate({ engine: engine.name as "cursor", key }); }}>
+      <input className="text-input" type="password" autoComplete="off" value={key} onChange={event => setKey(event.target.value)} placeholder={engine.keyHint} aria-label={`${engine.label} API key`} />
+      <MotionButton className="button secondary" disabled={key.trim().length < 8 || save.isPending}>{save.isPending ? "Saving…" : "Save key"}</MotionButton>
+      <button type="button" className="link-button" onClick={() => setOpen(false)}>Cancel</button>
+      <ErrorNote error={save.error} />
+    </form>
+  );
+}
+
+function EngineStep({ stepStatus, onDone }: { stepStatus: string | undefined; onDone: () => void }) {
+  const utils = trpc.useUtils();
+  const scan = trpc.setup.engines.useQuery(undefined, { refetchOnWindowFocus: true, refetchInterval: query => (query.state.data?.engines.some(engine => engine.job?.status === "running") ? 1500 : false) });
+  const [choice, setChoice] = useState<string | null>(null);
+  const select = trpc.setup.selectEngine.useMutation({ onSuccess: () => { void utils.setup.state.invalidate(); void utils.overview.invalidate(); void utils.settings.invalidate(); void scan.refetch(); } });
+  const connect = trpc.setup.connectEngine.useMutation({ onSuccess: () => void scan.refetch() });
+  const install = trpc.setup.installEngine.useMutation({ onSuccess: () => void scan.refetch() });
+  const cancel = trpc.setup.cancelEngineJob.useMutation({ onSuccess: () => void scan.refetch() });
+  const engines = scan.data?.engines ?? [];
+  const chosen = engines.find(engine => engine.name === (choice ?? scan.data?.recommended)) ?? null;
+  const [watching, setWatching] = useState<string | null>(null);
+  // Once a sign-in the user started succeeds, use that engine without another click.
+  useEffect(() => {
+    if (!watching) return;
+    const engine = engines.find(item => item.name === watching);
+    if (engine?.job?.status === "running") return;
+    setWatching(null);
+    if (engine?.ready) select.mutate({ engine: engine.name as "cursor" });
+  }, [scan.data]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (scan.isLoading) return <div className="welcome-body"><p><Loader2 size={13} className="spin-slow" /> Looking for coding agents on this computer…</p></div>;
+  const busy = connect.isPending || install.isPending || select.isPending;
+  const inUse = scan.data?.selected;
+  const id = (engine: EngineRow) => engine.name as "cursor";
+  return (
+    <div className="welcome-body">
+      <p>Meadow plans and verifies; a coding agent CLI writes the code, on its own branch, inside the project folder. Pick the one you want. Meadow checks what's installed and signed in on this computer, and connects it for you: Connect opens the vendor's sign-in page in your browser.</p>
+      {scan.data?.editors.length ? <p className="welcome-note">Found on this computer: {scan.data.editors.join(", ")}.</p> : null}
+      <div className="provider-scan">
+        {engines.map(engine => {
+          const tag = engineTag(engine);
+          const isChosen = chosen?.name === engine.name;
+          const job = engine.job;
+          return (
+            <div key={engine.name} className={`provider-block ${engine.ready ? "ok" : ""} ${isChosen ? "recommended" : ""}`}>
+              <div className="provider-scan-row">
+                <label className="provider-scan-name engine-pick">
+                  <input type="radio" name="engine" checked={isChosen} disabled={engine.status !== "available"} onChange={() => setChoice(engine.name)} />
+                  {engine.label}<em>{engine.version ?? (engine.app ? "app found" : engine.status === "available" ? "cli" : "soon")}</em>
+                </label>
+                <span className="provider-scan-reason" title={engine.binary ?? undefined}>{engine.detail}{engine.app && engine.installed ? " · desktop app found" : ""}</span>
+                <span className={`status-tag ${tag.cls}`}><span />{tag.text}</span>
+              </div>
+              {isChosen && engine.status === "available" ? (
+                <div className="provider-detail">
+                  {job?.status === "running" ? (
+                    <span className="welcome-note">
+                      <Loader2 size={12} className="spin-slow" /> {job.detail}{" "}
+                      {job.url ? <a href={job.url} target="_blank" rel="noreferrer noopener">Open the sign-in page</a> : null}{" "}
+                      <button type="button" className="link-button" onClick={() => cancel.mutate({ engine: id(engine) })}>Cancel</button>
+                    </span>
+                  ) : null}
+                  {job && job.status !== "running" ? <span className={job.status === "failed" ? "inline-error" : "welcome-note"}>{job.status === "done" ? <CheckCircle2 size={12} /> : <XCircle size={12} />} {job.detail}</span> : null}
+                  {!engine.installed && job?.status !== "running" && engine.install ? (
+                    <>
+                      <span className="welcome-note">Installs with the vendor's command: <code>{engine.install.command}</code>{engine.install.missing ? ` · ${engine.install.missing}; install it first` : ""}</span>
+                      <MotionButton className="button primary" disabled={busy || Boolean(engine.install.missing)} onClick={() => install.mutate({ engine: id(engine) })}>{install.isPending ? "Starting…" : `Install ${engine.label}`}</MotionButton>
+                    </>
+                  ) : null}
+                  {engine.installed && !engine.signedIn && engine.canLogin && job?.status !== "running" ? (
+                    <MotionButton className="button primary" disabled={busy} onClick={() => { setWatching(engine.name); connect.mutate({ engine: id(engine) }); }}><Plug size={13} /> {connect.isPending ? "Opening…" : `Connect ${engine.label}`}</MotionButton>
+                  ) : null}
+                  {engine.installed && !engine.signedIn && !engine.canLogin ? <span className="welcome-note">{engine.label} signs in from its own terminal app; paste an API key below instead.</span> : null}
+                  {engine.ready ? (
+                    <MotionButton className="button primary" disabled={busy} onClick={() => select.mutate({ engine: id(engine) }, { onSuccess: data => { if (data.ready) onDone(); } })}>{inUse === engine.name && stepStatus === "done" ? "In use · Continue" : `Use ${engine.label}`} <ArrowRight size={14} /></MotionButton>
+                  ) : null}
+                  {engine.installed && !engine.ready ? <EngineKeyField engine={engine} onSaved={() => void scan.refetch()} /> : null}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+      <div className="welcome-actions">
+        {stepStatus === "done" ? <MotionButton className="button primary" onClick={onDone}>Continue <ArrowRight size={14} /></MotionButton> : null}
+        <MotionButton className="button secondary" onClick={() => scan.refetch()} disabled={scan.isFetching}>{scan.isFetching ? "Scanning…" : "Scan again"}</MotionButton>
+      </div>
+      <ErrorNote error={connect.error ?? install.error ?? select.error ?? cancel.error ?? scan.error} />
+    </div>
+  );
+}
 
 function RepositoryStep({ suggested, projectId, steps, running, onDone }: { suggested: string | null; projectId: number | null; steps: Steps; running: string[]; onDone: () => void }) {
   const utils = trpc.useUtils();

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { capture, which } from "../core/exec";
+import { getSecret } from "../config";
+import { capture, findBinary } from "../core/exec";
 import { failureReason, type DoctorReport, type Engine, type EngineEvent, type RunRequest } from "./base";
 import { Supervisor } from "./supervisor";
 
@@ -88,7 +89,7 @@ export class CursorEngine implements Engine {
 
   private async resolveBinary() {
     if (this.binary) return this.binary;
-    this.binary = process.env.MEADOW_CURSOR_BIN || (await which("cursor-agent")) || (await which("agent"));
+    this.binary = process.env.MEADOW_CURSOR_BIN || (await findBinary(["cursor-agent", "agent"]));
     return this.binary;
   }
 
@@ -120,7 +121,8 @@ export class CursorEngine implements Engine {
     const status = await capture(binary, ["status"], { timeoutMs: 20_000 });
     const statusText = (status.stdout + status.stderr).trim();
     const loggedIn = status.code === 0 && !/not logged in|unauthenticated|log ?in required/i.test(statusText);
-    report.checks.push(loggedIn || process.env.CURSOR_API_KEY ? { name: "auth", ok: true, detail: statusText.split("\n")[0] || "Authenticated" } : { name: "auth", ok: false, detail: statusText.split("\n")[0] || "Not logged in", fix: "Run `cursor-agent login` (or set CURSOR_API_KEY in ~/.meadow/secrets.env)." });
+    const keySaved = !loggedIn && Boolean(getSecret("CURSOR_API_KEY"));
+    report.checks.push(loggedIn || keySaved ? { name: "auth", ok: true, detail: keySaved ? "CURSOR_API_KEY saved (checked on the first run)" : statusText.split("\n")[0] || "Authenticated" } : { name: "auth", ok: false, detail: statusText.split("\n")[0] || "Not logged in", fix: "Open Setup → Coding engine and click Connect (or save a CURSOR_API_KEY there)." });
     report.ready = report.checks.every(check => check.ok);
     return report;
   }
