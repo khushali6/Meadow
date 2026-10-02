@@ -22,11 +22,14 @@ MEADOW_HOME=/tmp/meadow-dev MEADOW_PROJECTS_DIR=/tmp/meadow-dev/projects MEADOW_
 - `server/routers.ts` — the dashboard API.
 - `server/meadow/` — everything else:
   - `harness/` — phase loop, verifier, guards, prompts, summaries
-  - `engines/` — Cursor, Claude Code and fake adapters, process supervisor
+  - `engines/` — Cursor, Codex, Gemini, custom and fake adapters (Claude Code coming soon), process supervisor
   - `intake/` — classify, clarify, spec, plan, conversation state (shared by Telegram and the dashboard)
   - `planning/` — `PLAN.md` parser and validator
   - `channels/` — Telegram and notifications
-  - `llm/` — FreeLLMAPI client
+  - `llm/` — agent model providers (OpenAI-compatible and Anthropic), endpoint policy, health checks
+  - `memory/` — local embeddings and embedding spaces
+  - `brief/` — project brief, status and plan-next-steps
+  - `atlas/` — CodeAtlas graph, retrieval, agents, tools, change impact, MCP
   - `rag/`, `visual/`, `core/` (db, events, git, exec, redaction, approvals)
 - `client/` — React dashboard.
 - `tests/` — unit, conformance (engine stream parsing against recorded sessions) and integration tests.

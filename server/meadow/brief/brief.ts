@@ -82,7 +82,7 @@ export function renderBrief(brief: ProjectBrief, budget = 6000): string {
   });
   const sections: Section[] = [
     { title: "Goal", priority: 0, minLines: 1, lines: [clip(brief.goal || "(no goal recorded)", 400)] },
-    { title: `Roadmap (plan v${brief.planVersion ?? "?"}: ${brief.counts.passed}/${brief.counts.total} passed${brief.counts.blocked ? `, ${brief.counts.blocked} blocked` : ""})`, priority: 1, minLines: roadmapLines.length, lines: roadmapLines.length ? roadmapLines : ["- No approved plan yet."] },
+    { title: brief.planVersion === null || brief.planVersion === undefined ? "Roadmap" : `Roadmap (plan v${brief.planVersion}: ${brief.counts.passed}/${brief.counts.total} passed${brief.counts.blocked ? `, ${brief.counts.blocked} blocked` : ""})`, priority: 1, minLines: roadmapLines.length, lines: roadmapLines.length ? roadmapLines : ["- No approved plan yet."] },
     { title: "Current phase", priority: 1, minLines: 1, lines: brief.currentPhase ? [brief.currentPhase] : [] },
     { title: "Constraints", priority: 2, minLines: 3, lines: [...brief.constraints.slice(0, 10).map(item => `- ${clip(item, 160)}`), ...(brief.stack.length ? [`- Stack: ${brief.stack.join(", ")}`] : [])] },
     { title: "Recent failures", priority: 3, minLines: 1, lines: brief.failures.map(item => `- ${clip(item.title, 140)}${item.detail ? `: ${clip(item.detail, 200)}` : ""}`) },

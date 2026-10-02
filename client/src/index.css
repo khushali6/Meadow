@@ -820,7 +820,7 @@ button.cite-chip:hover { background: var(--sun); }
 .audit-table td.result-ok { color: #3f6b41; }
 .audit-wrap { overflow-x: auto; }
 .audit-policy { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 0 16px 12px; font-size: 11px; color: var(--muted); }
-.impact-report { border-top: 1px solid var(--ink); margin-top: 10px; padding-top: 10px; display: grid; gap: 8px; }
+.impact-report { border-top: 1px solid var(--ink); margin-top: 10px; padding: 10px 16px 4px; display: grid; gap: 8px; }
 .impact-head { display: flex; align-items: center; gap: 8px; }
 .impact-head strong { font-size: 12px; }
 .impact-reasons { margin: 0; padding-left: 16px; font-size: 11px; color: var(--ink); display: grid; gap: 3px; }
@@ -846,3 +846,8 @@ button.cite-chip:hover { background: var(--sun); }
 .metric-bar span.has-failed { background: var(--error); }
 .metric-bar em { font: 8px ui-monospace, monospace; color: var(--muted); font-style: normal; }
 .metric-reasons { display: flex; flex-wrap: wrap; gap: 6px; }
+.header-actions select { height: 32px; padding: 0 10px; border: 1px solid var(--ink); background: transparent; color: inherit; font: 11px ui-monospace, monospace; text-transform: uppercase; }
+.impact-hops { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.impact-hops li { display: grid; grid-template-columns: 44px minmax(0, auto) 1fr; align-items: center; gap: 8px; }
+.impact-hops .atlas-node-pill { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.impact-hops .impact-via { flex-basis: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

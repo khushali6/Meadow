@@ -11,14 +11,23 @@ Meadow defends against:
 - **The coding engine going off track**: editing the plan it is measured against, escaping the project folder through symlinks, committing secrets, mass-deleting files, or running forever.
 - **Accidental secret leakage** into prompts, logs, events, screenshots or the search index.
 
-Meadow does not defend against malware already running as your user, a compromised coding engine binary, or a compromised FreeLLMAPI gateway. The engines themselves execute code in your project with your user's permissions; Meadow supervises them but is not a sandbox.
+Meadow does not defend against malware already running as your user, a compromised coding engine binary, or a compromised model provider. The engines themselves execute code in your project with your user's permissions; Meadow supervises them but is not a sandbox.
 
 ## Controls
 
 ### Network
 
-- Outbound traffic: the coding engine (its own provider), your FreeLLMAPI gateway, and the Telegram Bot API if configured. Nothing else.
-- The FreeLLMAPI base URL must be a loopback address unless `MEADOW_ALLOW_REMOTE_LLM=1` is set.
+- Outbound traffic: the coding engine (its own provider), the agent model provider you chose, the Telegram Bot API if configured, and CodeAtlas connectors you enable. Nothing else.
+- Local providers (FreeLLMAPI, Ollama, LM Studio) must use a loopback address. Cloud providers (OpenAI, Anthropic, Gemini, OpenRouter) always use their official HTTPS endpoint, which can't be overridden. Custom OpenAI-compatible endpoints must be loopback unless allowed per provider, and then must use HTTPS. `MEADOW_ALLOW_REMOTE_LLM=1` lifts the loopback rule for local and custom providers.
+- Memory (context index, notes, knowledge graph, embeddings) stays in the local database. Embeddings are computed locally or by a local provider, never by a cloud provider. Only prompt text and the snippets selected for it go to a cloud chat provider.
+- Agent keys (`AGENT_*`, `FREELLMAPI_API_KEY`, `OPENROUTER_API_KEY`, `LLM_API_KEY`) and engine keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `CURSOR_API_KEY`) are kept apart: engines never receive agent keys and the agent never uses engine keys.
+
+### Tools and prompts
+
+- Every CodeAtlas/MCP tool has a risk level (`READ`, `LOW_WRITE`, `HIGH_WRITE`, `DESTRUCTIVE`). Writes create an approval request that defaults to deny and expires; destructive tools can never be invoked over MCP.
+- Tool arguments are validated with strict schemas; file paths must be relative and stay inside the project. External MCP tools are only offered to agents if they declare `readOnlyHint` and not `destructiveHint`.
+- Every tool call is written to an audit log with a SHA-256 hash of its arguments, never the arguments themselves.
+- Repository content placed in prompts (files, issues, check output, search results) is wrapped in an untrusted-content block, and prompts instruct the model to treat it as data, not instructions.
 
 ### Dashboard
 

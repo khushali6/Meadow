@@ -131,7 +131,7 @@ function NodePanel({ projectId, nodeId, onClose, onPathFrom, pathFrom, onFocus, 
           {impact.data.owners.length ? <div className="impact-row"><span>Owners</span>{impact.data.owners.join(", ")}</div> : null}
           {impact.data.tests.length ? <div className="impact-row"><span>Tests</span>{impact.data.tests.slice(0, 6).join(", ")}</div> : null}
           {impact.data.incidents.length ? <div className="impact-row"><span>Past incidents</span>{impact.data.incidents.map(item => item.name).join(", ")}</div> : null}
-          <ul className="map-edges">{impact.data.impacted.slice(0, 30).map(item => <li key={item.id}><span className="atlas-via">hop {item.depth}</span><span className={`atlas-node-pill kind-${item.kind}`}>{item.name}</span><em className="impact-via">{item.via}</em></li>)}</ul>
+          <ul className="impact-hops">{impact.data.impacted.slice(0, 30).map(item => <li key={item.id}><span className="atlas-via">hop {item.depth}</span><span className={`atlas-node-pill kind-${item.kind}`}>{item.name}</span><em className="impact-via">{item.via}</em></li>)}</ul>
         </div>
       ) : null}
       <ul className="map-edges">
@@ -182,7 +182,7 @@ export function SystemMapView({ project, onNavigate }: { project: ProjectSummary
         {pathFrom && !pathTo ? <span className="map-hint">Click a target node to trace the path</span> : null}
       </div>
       <Reveal show={Boolean(active)} className="banner ok map-overlay">
-        <div><strong>{path.data ? "Shortest path" : highlight?.question ? `Investigation #${highlight.id}` : "Overlay"}</strong><span>{path.data ? path.data.text : highlight?.question}</span></div>
+        <div><strong>{path.data ? "Shortest path" : highlight?.id ? `Investigation #${highlight.id}` : highlight?.question ? "Change impact" : "Overlay"}</strong><span>{path.data ? path.data.text : highlight?.question}</span></div>
         <div className="banner-actions"><MotionButton className="button tiny secondary" onClick={clearOverlay}>Clear</MotionButton></div>
       </Reveal>
       {pathFrom && pathTo && path.data === null ? <div className="banner warn"><div><strong>No path</strong><span>These two nodes are not connected within six hops.</span></div></div> : null}
