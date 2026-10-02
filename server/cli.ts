@@ -186,21 +186,25 @@ async function setup(args: string[]): Promise<number> {
   const interactive = Boolean(process.stdin.isTTY) && !args.includes("--yes") && !args.includes("--non-interactive");
   const rl = interactive ? createInterface({ input: process.stdin, output: process.stdout, terminal: true }) : null;
   let muted = false;
+  const realWrite = process.stdout.write.bind(process.stdout);
   if (rl) {
-    const out = rl as unknown as { _writeToOutput: (text: string) => void };
-    out._writeToOutput = text => {
-      if (!muted) process.stdout.write(text);
-      else if (/[\r\n]/.test(text)) process.stdout.write("\n");
-      else process.stdout.write("*".repeat(text.length));
-    };
+    // While a secret is typed, echo `*` per character and drop readline's redraws, so the value never reaches the screen.
+    process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+      if (!muted) return (realWrite as (...args: unknown[]) => boolean)(chunk, ...rest);
+      const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString();
+      if (/[\r\n]/.test(text)) return realWrite("\n");
+      if (/^[^\x00-\x1f\x7f]+$/.test(text)) return realWrite("*".repeat([...text].length));
+      return true;
+    }) as typeof process.stdout.write;
   }
   const ask = async (question: string, fallback = "", options: { secret?: boolean } = {}) => {
     if (!rl) return fallback;
     const prompt = fallback ? `${question} [${fallback}]: ` : `${question}: `;
-    process.stdout.write(prompt);
+    // readline writes the prompt synchronously inside question(); only what's typed after it is masked.
+    const answer = rl.question(prompt);
     muted = Boolean(options.secret);
     try {
-      return (await rl.question("")).trim() || fallback;
+      return (await answer).trim() || fallback;
     } finally {
       muted = false;
     }
@@ -220,6 +224,7 @@ async function setup(args: string[]): Promise<number> {
     return results.engine === false ? 2 : 0;
   } finally {
     rl?.close();
+    process.stdout.write = realWrite as typeof process.stdout.write;
   }
 }
 
