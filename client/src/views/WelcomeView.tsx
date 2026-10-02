@@ -121,7 +121,7 @@ function RepositoryStep({ suggested, projectId, onDone }: { suggested: string | 
         </ul>
       ) : null}
       <div className="welcome-actions">
-        <MotionButton className="button primary" disabled={!detect.data || register.isPending} onClick={() => register.mutate({ path: target })}>{register.isPending ? "Registering…" : "Use this repository"} <ArrowRight size={14} /></MotionButton>
+        <MotionButton className="button primary" disabled={!detect.data || register.isPending || value.trim() !== target} title={value.trim() !== target ? "Click Detect for the new path first" : undefined} onClick={() => register.mutate({ path: target })}>{register.isPending ? "Registering…" : "Use this repository"} <ArrowRight size={14} /></MotionButton>
         {projectId ? <MotionButton className="button secondary" onClick={onDone}>Keep current project</MotionButton> : null}
       </div>
       <ErrorNote error={register.error} />
