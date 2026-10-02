@@ -76,7 +76,7 @@ export function RequestView({ onNavigate }: { onNavigate: (path: string) => void
   return (
     <>
       <PageHeader
-        eyebrow="New request"
+        eyebrow="00 / NEW REQUEST"
         title="Say what you want built."
         description="Plain language is fine. Meadow asks up to five short questions, writes a SPEC and a phased PLAN with real checks, and waits for your approval before touching code. Paste a full PLAN.md to skip straight to review."
         action={messages.length ? <button className="button secondary" onClick={() => { setMessages([]); chatAction.mutate({ action: "cancel" }); }}>Clear conversation</button> : undefined}

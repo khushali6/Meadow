@@ -8,7 +8,7 @@ export function ProjectsView({ projects, settings, activeId, onOpen }: { project
   const [creating, setCreating] = useState(false);
   return (
     <>
-      <PageHeader eyebrow="Projects" title="Everything Meadow is building." description="Each project is a plain git repository inside your projects folder. Meadow never writes outside it." action={<button className="button primary" onClick={() => setCreating(true)}><Plus size={15} /> New project</button>} />
+      <PageHeader eyebrow="02 / WORKSPACES" title="Workspaces." description="Each project is a plain git repository inside your projects folder. Meadow never writes outside it." action={<button className="button primary" onClick={() => setCreating(true)}><Plus size={15} /> New project</button>} />
       {projects.length === 0 ? <EmptyState icon={FolderKanban} title="No projects yet" body="Create one here, send a request from the Request page, or message your Telegram bot." action={<button className="button primary" onClick={() => setCreating(true)}>Create a project</button>} /> : null}
       <div className="project-grid">
         {projects.map(project => (

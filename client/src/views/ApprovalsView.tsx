@@ -22,7 +22,7 @@ export function ApprovalsView({ approvals, projects }: { approvals: Approval[]; 
   const projectName = (id: number | null) => projects.find(project => project.id === id)?.name ?? "Meadow";
   return (
     <>
-      <PageHeader eyebrow="Approvals" title="Risky actions wait for you." description="Mass deletions and similar actions pause the run until you decide. Anything you don't answer in time is denied, never approved." />
+      <PageHeader eyebrow="04 / POLICY GATES" title="Every risky action has a boundary." description="Mass deletions and similar actions pause the run until you decide. Anything you don't answer in time is denied, never approved." />
       <ErrorNote error={decide.error} />
       {pending.length === 0 ? <EmptyState icon={ShieldCheck} title="Nothing waiting" body="When a phase tries something risky, it shows up here and in Telegram." /> : null}
       <div className="approval-list">

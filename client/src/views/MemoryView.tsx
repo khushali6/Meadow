@@ -19,8 +19,8 @@ export function MemoryView({ project }: { project: ProjectSummary | undefined })
   return (
     <>
       <PageHeader
-        eyebrow={project ? `${project.name} · Memory` : "Memory"}
-        title="What Meadow remembers."
+        eyebrow={project ? `05 / CONTEXT INDEX · ${project.name}` : "05 / CONTEXT INDEX"}
+        title="Remember the context."
         description="Notes and project code are indexed locally so prompts get the right context. .env files, keys, and credentials are never indexed."
         action={project ? <button className="button secondary" disabled={reindex.isPending} onClick={() => reindex.mutate({ projectId: project.id })}><RefreshCw size={15} className={reindex.isPending ? "spin-slow" : undefined} /> {reindex.isPending ? "Indexing…" : "Re-index project"}</button> : undefined}
       />

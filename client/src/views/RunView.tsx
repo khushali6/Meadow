@@ -41,7 +41,7 @@ export function RunView({ detail, onNavigate }: { detail: ProjectDetail; onNavig
   if (!detail.approvedPlanId) {
     return (
       <>
-        <PageHeader eyebrow={project.name} title="No approved plan yet." description="Describe what you want on the Request page (or in Telegram), or write a PLAN.md in the Plan editor. Nothing runs until you approve a plan." />
+        <PageHeader eyebrow={`01 / LIVE CONSOLE · ${project.name}`} title="No approved plan yet." description="Describe what you want on the Request page (or in Telegram), or write a PLAN.md in the Plan editor. Nothing runs until you approve a plan." />
         <EmptyState icon={FileText} title={detail.latestPlan ? `Plan v${detail.latestPlan.version} is waiting for approval` : "Start with a request"} body={detail.latestPlan ? "Review it in the Plan editor and approve it to start." : "Meadow will ask a few questions, write SPEC.md and PLAN.md, then wait for you."} action={<button className="button primary" onClick={() => onNavigate(detail.latestPlan ? "/plans" : "/request")}>{detail.latestPlan ? "Review plan" : "New request"}</button>} />
       </>
     );
@@ -53,8 +53,8 @@ export function RunView({ detail, onNavigate }: { detail: ProjectDetail; onNavig
   return (
     <>
       <PageHeader
-        eyebrow={`${project.name} · ${project.engine}`}
-        title="Build with receipts."
+        eyebrow={`01 / LIVE CONSOLE · ${project.name} · ${project.engine}`}
+        title="Built phase by phase, with receipts."
         description="Every phase is measured by real checks, every change is on its own branch, and nothing runs outside this project folder."
         action={
           <div className="header-actions">

@@ -63,7 +63,7 @@ export function SettingsView({ settings, overview, project }: { settings: Settin
 
   return (
     <>
-      <PageHeader eyebrow="Settings" title="Your machine, your rules." description="Meadow runs entirely on this computer. The only outbound traffic is to your coding engine, your local FreeLLMAPI gateway, and Telegram if you connect it." />
+      <PageHeader eyebrow="06 / RUNTIME SETTINGS" title="Tune the guardrails." description="Meadow runs entirely on this computer. The only outbound traffic is to your coding engine, your local FreeLLMAPI gateway, and Telegram if you connect it." />
       <ErrorNote error={update.error ?? updateProject.error ?? exportRun.error} />
       <div className="settings-grid">
 

@@ -80,8 +80,8 @@ export function PlanView({ detail, onNavigate }: { detail: ProjectDetail; onNavi
   return (
     <>
       <PageHeader
-        eyebrow={`${project.name} · Plan editor`}
-        title="The plan is the contract."
+        eyebrow={`03 / EXECUTION PLAN · ${project.name}`}
+        title="Make the work legible."
         description="Every phase needs at least one check that can actually fail. Meadow refuses to start until the plan validates, and every save is a new version you can compare or restore."
         action={
           <div className="header-actions">
