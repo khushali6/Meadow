@@ -7,9 +7,11 @@ import { appRouter } from "../routers";
 import { Notifier } from "../meadow/channels/notifier";
 import { telegram } from "../meadow/channels/telegram";
 import { homePath, loadConfig, meadowHome } from "../meadow/config";
-import { expireOrphanedApprovals } from "../meadow/core/approvals";
+import { closeExternalClients } from "../meadow/atlas/mcpClient";
+import { startActionExecutor } from "../meadow/atlas/tools";
+import { expireOrphanedApprovals, sweepExpiredApprovals } from "../meadow/core/approvals";
 import { getDb } from "../meadow/core/db";
-import { bus, eventsAfter } from "../meadow/core/events";
+import { bus, eventsAfter, startForeignEventRelay } from "../meadow/core/events";
 import { harness } from "../meadow/harness/runner";
 import { screenshotFile } from "../meadow/service";
 import { stopAllPreviews } from "../meadow/visual/preview";
@@ -38,6 +40,12 @@ export async function startDaemon(options: { port?: number; dev?: boolean } = {}
   getDb();
   const interrupted = harness.recoverOnStartup();
   expireOrphanedApprovals();
+  getDb().run("UPDATE atlas_actions SET status = CASE status WHEN 'running' THEN 'interrupted' ELSE 'expired' END, finished_at = ? WHERE status IN ('pending', 'running')", new Date().toISOString());
+  getDb().run("UPDATE atlas_investigations SET status = 'failed', answer = 'Meadow stopped during this investigation.' WHERE status = 'running'");
+  startActionExecutor();
+  const stopRelay = startForeignEventRelay();
+  const sweep = setInterval(() => sweepExpiredApprovals(), 30_000);
+  sweep.unref();
   const token = sessionToken();
 
   const app = express();
@@ -117,6 +125,9 @@ export async function startDaemon(options: { port?: number; dev?: boolean } = {}
     console.log("\n  Stopping Meadow…");
     notifier.stop();
     telegram.stop();
+    stopRelay();
+    clearInterval(sweep);
+    await closeExternalClients();
     await harness.shutdown();
     stopAllPreviews();
     server.close();

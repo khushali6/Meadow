@@ -22,6 +22,15 @@ Usage:
   meadow status [project]             Show project status
   meadow pair                         Print a new Telegram pairing code
   meadow export-run <project> [--out file.json]
+
+CodeAtlas (engineering intelligence over your repos):
+  meadow mcp [--project P]            MCP server on stdio for Cursor, Claude Code and other clients
+  meadow atlas demo [dir]             Generate the AcmePay demo repo, register and index it
+  meadow atlas ingest <project>       Build or refresh the knowledge graph
+  meadow atlas ask <project> "<q>"    Investigate (--mode agentic|hybrid|graph|vector)
+  meadow atlas eval <project>         Benchmark vector, graph, hybrid and agentic retrieval
+  meadow atlas tools                  List the tools agents and MCP clients can call
+  meadow atlas mcp-config             Print the MCP config for Cursor and Claude Code
 `;
 
 function flag(args: string[], name: string): string | undefined {
@@ -136,9 +145,76 @@ function exportRun(name: string, out?: string) {
   console.log(`Wrote ${file}`);
 }
 
+async function atlas(args: string[]): Promise<number> {
+  const [sub, ...rest] = args;
+  getDb();
+  if (sub === "demo") {
+    const { generateAcmePay } = await import("./meadow/atlas/demo");
+    const { ingestProject } = await import("./meadow/atlas/ingest");
+    const name = flag(rest, "--name") ?? "acmepay";
+    const dir = path.resolve(rest[0] && !rest[0].startsWith("--") ? rest[0] : path.join(loadConfig().projectsDir, name));
+    const { commits, tags } = await generateAcmePay(dir);
+    const project = await createProject({ name, path: dir, description: "AcmePay demo for CodeAtlas" });
+    const stats = await ingestProject(project.id, (step, detail) => console.log(`  ${step.padEnd(10)} ${detail ?? ""}`));
+    console.log(`\nAcmePay is at ${dir} (${commits} commits, releases ${tags.join(", ")}).\nIndexed ${stats.services} services, ${stats.functions} functions, ${stats.apis} APIs, ${stats.incidents} incidents in ${stats.ms} ms.\n\nTry:\n  meadow atlas ask ${name} "Why did payment API timeouts start after release v2.4.0?"\n  meadow atlas eval ${name}`);
+    return 0;
+  }
+  if (sub === "ingest" && rest[0]) {
+    const { ingestProject } = await import("./meadow/atlas/ingest");
+    const stats = await ingestProject(getProject(rest[0]).id, (step, detail) => console.log(`  ${step.padEnd(10)} ${detail ?? ""}`));
+    console.log(JSON.stringify(stats, null, 2));
+    return 0;
+  }
+  if (sub === "ask" && rest[0] && rest[1]) {
+    const { investigate } = await import("./meadow/atlas/agents");
+    const { ingestProject } = await import("./meadow/atlas/ingest");
+    const { graphStats } = await import("./meadow/atlas/store");
+    const project = getProject(rest[0]);
+    if (!graphStats(project.id).lastIngest) await ingestProject(project.id);
+    const off = bus.onEvent(event => {
+      if (event.type === "atlas_trace" && event.projectId === project.id) console.log(`  · ${event.title}: ${event.detail.split("\n")[0].slice(0, 140)}`);
+    });
+    const result = await investigate(project.id, rest[1], { mode: (flag(rest, "--mode") as "agentic" | undefined) ?? "agentic", actor: "cli" });
+    off();
+    console.log(`\n${result.answer}\n`);
+    for (const e of result.evidence) console.log(`  [${e.n}] ${e.title}${e.path ? ` — ${e.path}` : ""}`);
+    console.log(`\nVerifier: ${result.verifier.supported}/${result.verifier.total} claims supported · ${result.writer === "llm" ? "LLM writer" : "rule-based writer (FreeLLMAPI unavailable)"} · ${result.ms} ms`);
+    for (const finding of result.findings) console.log(`Path: ${finding.text}`);
+    return 0;
+  }
+  if (sub === "eval" && rest[0]) {
+    const { runEval, formatReport } = await import("./meadow/atlas/eval");
+    const report = await runEval(getProject(rest[0]).id, { onProgress: line => console.log(`  ${line}`) });
+    console.log(`\n${formatReport(report)}`);
+    const out = flag(rest, "--json");
+    if (out) fs.writeFileSync(out, JSON.stringify(report, null, 2));
+    return 0;
+  }
+  if (sub === "tools") {
+    const { TOOLS } = await import("./meadow/atlas/tools");
+    for (const tool of TOOLS) console.log(`  ${tool.name.padEnd(24)} ${tool.risk.padEnd(5)} ${tool.description}`);
+    return 0;
+  }
+  if (sub === "mcp-config") {
+    const { mcpConfigSnippet } = await import("./meadow/atlas/mcpServer");
+    const snippet = mcpConfigSnippet(path.resolve(process.argv[1]));
+    console.log(`Cursor — add to ${snippet.cursor.file}:\n${JSON.stringify(snippet.cursor.json, null, 2)}\n\nClaude Code:\n  ${snippet.claudeCode.command}`);
+    return 0;
+  }
+  console.log(HELP);
+  return 1;
+}
+
 async function main() {
   const [command, ...args] = process.argv.slice(2);
   switch (command) {
+    case "mcp": {
+      const { startMcpServer } = await import("./meadow/atlas/mcpServer");
+      await startMcpServer({ project: flag(args, "--project") });
+      return null;
+    }
+    case "atlas":
+      return atlas(args);
     case "init":
       await init();
       return 0;

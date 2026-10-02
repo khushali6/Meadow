@@ -77,27 +77,75 @@ export function listActions(projectId: number, limit = 50) {
   return getDb().all<ActionRow>("SELECT * FROM atlas_actions WHERE project_id = ? ORDER BY id DESC LIMIT ?", projectId, limit).map(row => ({ ...row, args: JSON.parse(row.args_json) }));
 }
 
-/** Records an action, asks the owner, and runs it only on approval. Expiry means deny. */
-function gated(ctx: ToolContext, tool: string, title: string, detail: string, args: unknown, risk: "medium" | "high", execute: () => Promise<string>): ToolResult {
-  const actionId = getDb().insert("atlas_actions", { project_id: ctx.projectId, investigation_id: ctx.investigationId ?? null, tool, title, args_json: JSON.stringify(args), status: "pending", actor: ctx.actor, created_at: now() });
-  const approval = requestApproval({ projectId: ctx.projectId, kind: `atlas.${tool}`, title, detail, risk });
-  getDb().update("atlas_actions", actionId, { approval_id: approval.id });
-  approval.decision.then(async approved => {
-    if (!approved) {
-      getDb().update("atlas_actions", actionId, { status: "denied", finished_at: now() });
-      return;
+type Executor = (args: Record<string, unknown>, projectId: number) => Promise<string>;
+
+const EXECUTORS: Record<string, Executor> = {
+  async run_tests(args, projectId) {
+    const project = getProject(projectId);
+    const result = await runShell(String(args.command), { cwd: project.path, timeoutS: loadConfig().harness.checkTimeoutS, env: minimalEnv() });
+    return `exit ${result.exitCode}${result.timedOut ? " (timed out)" : ""} in ${Math.round(result.durationMs / 1000)}s\n${tail(result.output, 80, 6000)}`;
+  },
+  async create_issue(args, projectId) {
+    const project = getProject(projectId);
+    const github = loadConfig().atlas.connectors.github;
+    const repo = github.enabled && getSecret("GITHUB_TOKEN") ? await githubRepo(projectId) : null;
+    if (repo) {
+      const response = await fetch(`https://api.github.com/repos/${repo}/issues`, { method: "POST", headers: { Authorization: `Bearer ${getSecret("GITHUB_TOKEN")}`, Accept: "application/vnd.github+json", "User-Agent": "meadow-atlas", "Content-Type": "application/json" }, body: JSON.stringify({ title: args.title, body: args.body, labels: args.labels ?? [] }), signal: AbortSignal.timeout(20_000) });
+      if (!response.ok) throw new Error(`GitHub returned ${response.status}`);
+      const created = (await response.json()) as { html_url: string; number: number };
+      return `Created GitHub issue #${created.number}: ${created.html_url}`;
     }
-    getDb().update("atlas_actions", actionId, { status: "running" });
-    try {
-      const result = redact(await execute());
-      getDb().update("atlas_actions", actionId, { status: "done", result, finished_at: now() });
-      bus.emitEvent({ type: "message", projectId: ctx.projectId, title: `${title}: done`, detail: result.slice(0, 1500), payload: { atlasAction: actionId, tool } });
-    } catch (error) {
-      getDb().update("atlas_actions", actionId, { status: "failed", result: (error as Error).message, finished_at: now() });
-      bus.emitEvent({ type: "error", projectId: ctx.projectId, title: `${title}: failed`, detail: (error as Error).message, payload: { atlasAction: actionId, tool } });
-    }
+    addNote({ projectId: project.id, title: String(args.title), body: String(args.body), source: "atlas" });
+    return `Saved as a note in ${project.name}`;
+  },
+  async propose_patch(args, projectId) {
+    const project = getProject(projectId);
+    if (harness.isActive(project.id)) throw new Error("A run is already active for this project.");
+    const row = savePlanVersion(project.id, String(args.plan), { source: "atlas" });
+    await approvePlan(row.id);
+    const executionId = await harness.start(project.id, { hint: String(args.description).slice(0, 2000) });
+    return `Started execution ${executionId} with plan v${row.version} on ${project.engine}. Progress streams to the dashboard and Telegram.`;
+  },
+};
+
+let executorStarted = false;
+
+async function settleAction(approvalId: number, status: string) {
+  const db = getDb();
+  const action = db.get<ActionRow>("SELECT * FROM atlas_actions WHERE approval_id = ? AND status = 'pending'", approvalId);
+  if (!action) return;
+  if (status !== "approved") {
+    db.run("UPDATE atlas_actions SET status = ?, finished_at = ? WHERE id = ? AND status = 'pending'", status === "expired" ? "expired" : "denied", now(), action.id);
+    return;
+  }
+  if (db.run("UPDATE atlas_actions SET status = 'running' WHERE id = ? AND status = 'pending'", action.id).changes === 0) return;
+  try {
+    const result = redact(await EXECUTORS[action.tool](JSON.parse(action.args_json), action.project_id));
+    db.update("atlas_actions", action.id, { status: "done", result, finished_at: now() });
+    bus.emitEvent({ type: "message", projectId: action.project_id, title: `${action.title}: done`, detail: result.slice(0, 1500), payload: { atlasAction: action.id, tool: action.tool } });
+  } catch (error) {
+    db.update("atlas_actions", action.id, { status: "failed", result: (error as Error).message, finished_at: now() });
+    bus.emitEvent({ type: "error", projectId: action.project_id, title: `${action.title}: failed`, detail: (error as Error).message, payload: { atlasAction: action.id, tool: action.tool } });
+  }
+}
+
+/** Runs approved CodeAtlas actions. The daemon owns this; the MCP server process only records requests. */
+export function startActionExecutor() {
+  if (executorStarted) return;
+  executorStarted = true;
+  bus.onEvent(event => {
+    if (event.type !== "approval_decided" || typeof event.payload?.approvalId !== "number") return;
+    void settleAction(event.payload.approvalId, String(event.payload.status));
   });
-  return { summary: `Waiting for approval #${approval.id}: ${title}. Approve it in the dashboard or on Telegram.`, data: { actionId, approvalId: approval.id, status: "pending" }, pending: { actionId, approvalId: approval.id } };
+}
+
+/** Records an action and asks the owner. It runs only after approval; expiry means deny. */
+function gated(ctx: ToolContext, tool: keyof typeof EXECUTORS, title: string, detail: string, args: Record<string, unknown>, risk: "medium" | "high"): ToolResult {
+  if (process.env.MEADOW_ROLE !== "mcp") startActionExecutor();
+  const actionId = getDb().insert("atlas_actions", { project_id: ctx.projectId, investigation_id: ctx.investigationId ?? null, tool, title, args_json: JSON.stringify(args), status: "pending", actor: ctx.actor, created_at: now() });
+  const approval = requestApproval({ projectId: ctx.projectId, kind: `atlas.${tool}`, title, detail, risk, detached: true });
+  getDb().update("atlas_actions", actionId, { approval_id: approval.id });
+  return { summary: `Waiting for approval #${approval.id}: ${title}. Approve it in the Meadow dashboard or on Telegram; it runs in the Meadow daemon.`, data: { actionId, approvalId: approval.id, status: "pending" }, pending: { actionId, approvalId: approval.id } };
 }
 
 export function fixPlanMarkdown(input: { projectName: string; title: string; description: string; files: string[]; checks: string[] }): string {
@@ -276,7 +324,7 @@ export const TOOLS: ToolDef[] = [
       const authors = getDb().all<{ name: string; n: number }>(
         `SELECT p.name, COUNT(*) n FROM atlas_edges m JOIN atlas_edges a ON a.dst = m.src AND a.kind = 'authored' JOIN atlas_nodes p ON p.id = a.src
          WHERE m.kind IN ('modifies','changes') AND m.dst = ? GROUP BY p.id ORDER BY n DESC LIMIT 5`, service && node.kind !== "file" ? service.id : node.id);
-      return { summary: `${node.name}: ${teams.join(", ") || "no CODEOWNERS entry"}`, data: { entity: node.name, service: service?.name ?? null, teams, topAuthors: authors }, evidence: [{ title: `Owner of ${node.name}`, text: `${service ? `${service.name} owned_by ${teams.join(", ") || "nobody"}` : ""}\nTop authors: ${authors.map(a => `${a.name} (${a.n})`).join(", ")}`, nodeId: service?.id ?? node.id, kind: "graph" }] };
+      return { summary: `${node.name}: ${teams.join(", ") || "no CODEOWNERS entry"}`, data: { entity: node.name, service: service?.name ?? null, teams, topAuthors: authors }, evidence: [{ title: `Owner of ${node.name}`, text: `${service ? teams.map(team => `service ${service.name} ─owned_by→ team ${team}`).join("\n") : ""}\nTop authors: ${authors.map(a => `${a.name} (${a.n})`).join(", ")}`, nodeId: service?.id ?? node.id, kind: "graph" }] };
     },
   }),
   define({
@@ -288,10 +336,7 @@ export const TOOLS: ToolDef[] = [
       const detected = detectTestCommands(project.path);
       const command = args.command?.trim() || detected[0];
       if (!command) return { summary: "No test command found. Pass one explicitly.", data: { detected } };
-      return gated(ctx, "run_tests", `Run tests in ${project.name}`, `Command: ${command}\nDirectory: ${project.path}`, { command }, detected.includes(command) ? "medium" : "high", async () => {
-        const result = await runShell(command, { cwd: project.path, timeoutS: loadConfig().harness.checkTimeoutS, env: minimalEnv() });
-        return `exit ${result.exitCode}${result.timedOut ? " (timed out)" : ""} in ${Math.round(result.durationMs / 1000)}s\n${tail(result.output, 80, 6000)}`;
-      });
+      return gated(ctx, "run_tests", `Run tests in ${project.name}`, `Command: ${command}\nDirectory: ${project.path}`, { command }, detected.includes(command) ? "medium" : "high");
     },
   }),
   define({
@@ -299,21 +344,10 @@ export const TOOLS: ToolDef[] = [
     description: "Files an issue after approval: on GitHub when that connector is enabled, otherwise as a Meadow note.",
     shape: { title: z.string().min(3).max(200), body: z.string().max(20_000), labels: z.array(z.string().max(50)).max(10).optional() },
     async run(args, ctx) {
-      const project = getProject(ctx.projectId);
       const settings = loadConfig().atlas.connectors.github;
       const useGithub = settings.enabled && !!getSecret("GITHUB_TOKEN");
       const target = useGithub ? `GitHub (${(await githubRepo(ctx.projectId)) ?? "repo unknown"})` : "Meadow notes";
-      return gated(ctx, "create_issue", `Create issue: ${args.title}`, `Target: ${target}\n\n${args.body.slice(0, 1500)}`, args, "medium", async () => {
-        const repo = useGithub ? await githubRepo(ctx.projectId) : null;
-        if (repo) {
-          const response = await fetch(`https://api.github.com/repos/${repo}/issues`, { method: "POST", headers: { Authorization: `Bearer ${getSecret("GITHUB_TOKEN")}`, Accept: "application/vnd.github+json", "User-Agent": "meadow-atlas", "Content-Type": "application/json" }, body: JSON.stringify({ title: args.title, body: args.body, labels: args.labels ?? [] }), signal: AbortSignal.timeout(20_000) });
-          if (!response.ok) throw new Error(`GitHub returned ${response.status}`);
-          const created = (await response.json()) as { html_url: string; number: number };
-          return `Created GitHub issue #${created.number}: ${created.html_url}`;
-        }
-        addNote({ projectId: project.id, title: args.title, body: args.body, source: "atlas" });
-        return `Saved as a note in ${project.name}`;
-      });
+      return gated(ctx, "create_issue", `Create issue: ${args.title}`, `Target: ${target}\n\n${args.body.slice(0, 1500)}`, args, "medium");
     },
   }),
   define({
@@ -325,12 +359,7 @@ export const TOOLS: ToolDef[] = [
       if (harness.isActive(project.id)) return { summary: "A run is already active for this project. Wait for it to finish.", data: null };
       const checks = args.checks?.length ? args.checks : detectTestCommands(project.path);
       const plan = fixPlanMarkdown({ projectName: project.name, title: args.title, description: args.description, files: args.files ?? [], checks });
-      return gated(ctx, "propose_patch", `Fix with Meadow: ${args.title}`, `Engine: ${project.engine}\nFiles: ${(args.files ?? []).join(", ") || "agent decides"}\nChecks: ${checks.join("; ") || "files changed"}\n\n${args.description.slice(0, 1200)}`, { ...args, plan }, "high", async () => {
-        const row = savePlanVersion(project.id, plan, { source: "atlas" });
-        await approvePlan(row.id);
-        const executionId = await harness.start(project.id, { hint: args.description.slice(0, 2000) });
-        return `Started execution ${executionId} with plan v${row.version} on ${project.engine}. Progress streams to the dashboard and Telegram.`;
-      });
+      return gated(ctx, "propose_patch", `Fix with Meadow: ${args.title}`, `Engine: ${project.engine}\nFiles: ${(args.files ?? []).join(", ") || "agent decides"}\nChecks: ${checks.join("; ") || "files changed"}\n\n${args.description.slice(0, 1200)}`, { ...args, plan }, "high");
     },
   }),
   define({

@@ -71,10 +71,12 @@ class EvidenceSet {
     return this.items.get(ref);
   }
   /** Numbers the strongest items 1..max and returns them; numbering is what the writer cites. */
-  finalize(max: number, pinned: string[] = []): Evidence[] {
+  finalize(max: number, pinned: string[] = [], keep: string[] = []): Evidence[] {
     const sorted = Array.from(this.items.values()).sort((a, b) => b.score - a.score);
     const pinnedItems = pinned.map(ref => this.items.get(ref)).filter((e): e is Evidence => Boolean(e));
-    const list = Array.from(new Set([...pinnedItems, ...sorted])).slice(0, max);
+    let list = Array.from(new Set([...pinnedItems, ...sorted])).slice(0, max);
+    const missing = keep.map(ref => this.items.get(ref)).filter((e): e is Evidence => Boolean(e) && !list.includes(e!));
+    if (missing.length) list = [...list.slice(0, max - missing.length), ...missing];
     list.forEach((item, i) => (item.n = i + 1));
     return list;
   }
@@ -103,7 +105,8 @@ function decompose(question: string, cls: Classification): string[] {
 function heuristicTools(question: string, cls: Classification): Array<{ name: string; args: Record<string, unknown> }> {
   const tools: Array<{ name: string; args: Record<string, unknown> }> = [];
   const services = cls.entities.filter(node => node.kind === "service");
-  if (cls.relations.includes("owned_by")) for (const node of cls.entities.slice(0, 2)) tools.push({ name: "get_owner", args: { entity: node.name } });
+  const hopped = cls.entities.filter(node => ["pr", "commit", "incident", "release", "issue"].includes(node.kind)).flatMap(node => edgesOf(node.id).filter(edge => ["changes", "affects", "deploys"].includes(edge.kind)).map(edge => getNode(edge.other)!)).filter(node => node?.kind === "service");
+  if (cls.relations.includes("owned_by")) for (const node of [...cls.entities.filter(n => !["pr", "commit", "incident", "release", "issue"].includes(n.kind)), ...hopped].slice(0, 3)) tools.push({ name: "get_owner", args: { entity: node.name } });
   if (cls.relations.includes("calls") || cls.relations.includes("depends_on")) for (const node of services.slice(0, 2)) tools.push({ name: "find_dependencies", args: { entity: node.name } });
   for (const match of question.matchAll(/(?:PR|pull request)\s*#?(\d+)|#(\d+)/gi)) tools.push({ name: "get_pull_request", args: { number: match[1] ?? match[2] } });
   for (const match of question.matchAll(/\b([A-Z][A-Z0-9]+-\d+)\b/g)) tools.push({ name: "get_issue", args: { key: match[1] } });
@@ -260,7 +263,7 @@ function ruleAnswer(projectId: number, question: string, cls: Classification, li
   }
   const KINDS = "service|table|team|api|infra|incident|pr|release|issue|pipeline|person|file|function|class|commit|doc|dependency|repo";
   const factRe = new RegExp(`^(${KINDS}) (.+?) ─(\\w+)→ (${KINDS}) (.+)$`);
-  const grouped = new Map<string, { subject: string; verb: string; objects: Array<{ name: string; n: number }> }>();
+  const grouped = new Map<string, { subject: string; verb: string; rel: string; objects: Array<{ name: string; n: number }> }>();
   const entityNames = new Set(cls.entities.map(e => e.name));
   const structural = cls.type === "relationship" || cls.type === "entity" || (cls.type === "exact" && cls.relations.length > 0);
   for (const e of structural ? list : []) for (const raw of e.facts) {
@@ -272,11 +275,12 @@ function ruleAnswer(projectId: number, question: string, cls: Classification, li
     const object = incoming ? src : dst;
     const verb = incoming ? `is ${PASSIVE[rel] ?? `${rel.replace(/_/g, " ")} by`}` : ACTIVE[rel] ?? rel.replace(/_/g, " ");
     const key = `${subject}|${verb}`;
-    const group = grouped.get(key) ?? { subject, verb, objects: [] };
+    const group = grouped.get(key) ?? { subject, verb, rel, objects: [] };
     if (!group.objects.some(o => o.name === object)) group.objects.push({ name: object, n: e.n });
     grouped.set(key, group);
   }
-  const groups = Array.from(grouped.values()).sort((a, b) => Number(entityNames.has(b.subject)) - Number(entityNames.has(a.subject)) || Number(b.verb.startsWith("is")) - Number(a.verb.startsWith("is")));
+  const relRank = (rel: string) => (cls.relations.includes(rel) ? cls.relations.indexOf(rel) : 99);
+  const groups = Array.from(grouped.values()).sort((a, b) => relRank(a.rel) - relRank(b.rel) || Number(entityNames.has(b.subject)) - Number(entityNames.has(a.subject)) || Number(b.verb.startsWith("is")) - Number(a.verb.startsWith("is")));
   for (const group of groups.slice(0, 4)) {
     const names = group.objects.slice(0, 6).map(o => `${o.name} [${o.n}]`);
     sentences.push(`${group.subject} ${group.verb} ${names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : names[0]}.`);
@@ -424,6 +428,7 @@ async function runInvestigation(id: number, projectId: number, question: string,
   const findings: Finding[] = [];
   let incident: AtlasNode | null = null;
   const followUpRefs: string[] = [];
+  const operatorRefs: string[] = [];
   if (agentic) {
     const candidates = [...cls.entities, ...evidence.all().sort((a, b) => b.score - a.score).slice(0, 8).map(e => (e.nodeId ? getNode(e.nodeId) : null)).filter((n): n is AtlasNode => Boolean(n))];
     incident = CAUSE_WORDS.test(question) || cls.type === "multi-hop" ? candidates.find(node => node.kind === "incident") ?? null : null;
@@ -460,7 +465,8 @@ async function runInvestigation(id: number, projectId: number, question: string,
         const output = await runTool(call.name, call.args, { projectId, actor: "agent", investigationId: id, usage });
         for (const item of output.evidence ?? []) {
           const node = item.nodeId ? getNode(item.nodeId) : null;
-          evidence.add({ ref: `tool:${call.name}:${item.title}`, title: `${item.title} (${call.name})`, kind: item.kind, path: item.path ?? null, snippet: item.text.slice(0, 1500), context: `tool ${call.name}`, ts: null, facts: item.text.split("\n").filter(line => line.includes("─")).slice(0, 6), node, sources: ["operator"], score: 0.012 });
+          const added = evidence.add({ ref: `tool:${call.name}:${item.title}`, title: `${item.title} (${call.name})`, kind: item.kind, path: item.path ?? null, snippet: item.text.slice(0, 1500), context: `tool ${call.name}`, ts: null, facts: item.text.split("\n").filter(line => line.includes("─")).slice(0, 6), node, sources: ["operator"], score: 0.012 });
+          if (added.facts.length) operatorRefs.push(added.ref);
         }
         trace.step("operator", call.name, output.summary, { args: call.args });
       } catch (error) {
@@ -474,7 +480,7 @@ async function runInvestigation(id: number, projectId: number, question: string,
     ...suspects.slice(0, 2).flatMap(s => evidence.all().filter(e => e.ref.startsWith("diff:") && e.nodeId === s.nodeId).map(e => e.ref)),
     ...followUpRefs.slice(0, 2),
   ];
-  let list = evidence.finalize(12, pinned);
+  let list = evidence.finalize(12, pinned, operatorRefs.slice(0, 3));
   const contextTokens = list.reduce((sum, e) => sum + approxTokens(`${e.title} ${e.snippet} ${e.facts.join(" ")}`), 0);
   const written = await write(projectId, question, cls, list, suspects, findings, incident, usage);
   trace.step("writer", "answer", written.text.slice(0, 600), { writer: written.writer, evidence: list.length });

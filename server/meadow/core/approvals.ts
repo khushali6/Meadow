@@ -8,7 +8,7 @@ const waiters = new Map<number, (approved: boolean) => void>();
 const timers = new Map<number, NodeJS.Timeout>();
 
 /** Ask the owner to approve a risky action. Resolves false on deny or expiry (expiry always means deny). */
-export function requestApproval(input: { projectId: number | null; runId?: number | null; kind: string; title: string; detail: string; risk?: "medium" | "high"; expiryS?: number }): { id: number; decision: Promise<boolean> } {
+export function requestApproval(input: { projectId: number | null; runId?: number | null; kind: string; title: string; detail: string; risk?: "medium" | "high"; expiryS?: number; detached?: boolean }): { id: number; decision: Promise<boolean> } {
   const expiryS = input.expiryS ?? loadConfig().approvals.expiryS;
   const id = getDb().insert("approvals", {
     project_id: input.projectId,
@@ -21,8 +21,8 @@ export function requestApproval(input: { projectId: number | null; runId?: numbe
     requested_at: now(),
     expires_at: new Date(Date.now() + expiryS * 1000).toISOString(),
   });
-  const decision = new Promise<boolean>(resolve => waiters.set(id, resolve));
-  timers.set(id, setTimeout(() => decide(id, "expired", "timeout"), expiryS * 1000));
+  const decision = input.detached ? Promise.resolve(false) : new Promise<boolean>(resolve => waiters.set(id, resolve));
+  if (!input.detached) timers.set(id, setTimeout(() => decide(id, "expired", "timeout"), expiryS * 1000));
   bus.emitEvent({ type: "approval_requested", projectId: input.projectId, runId: input.runId ?? null, title: input.title, detail: input.detail, payload: { approvalId: id, risk: input.risk ?? "medium", expiresInS: expiryS } });
   return { id, decision };
 }
@@ -43,6 +43,13 @@ export function decide(id: number, status: "approved" | "denied" | "expired", by
 /** Approvals left pending by a previous daemon process can no longer be honoured; expire them. */
 export function expireOrphanedApprovals() {
   getDb().run("UPDATE approvals SET status = 'expired', decided_at = ?, decided_by = 'restart' WHERE status = 'pending'", now());
+}
+
+/** Expires approvals past their deadline, including detached ones requested by other processes (the MCP server). */
+export function sweepExpiredApprovals() {
+  const rows = getDb().all<{ id: number }>("SELECT id FROM approvals WHERE status = 'pending' AND expires_at < ?", now());
+  for (const row of rows) decide(row.id, "expired", "timeout");
+  return rows.length;
 }
 
 export function listApprovals(limit = 100): ApprovalRow[] {

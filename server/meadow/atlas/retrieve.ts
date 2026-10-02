@@ -117,10 +117,11 @@ export function classify(projectId: number, query: string): Classification {
   let at: string | null = null;
   const asOf = lower.match(/\b(?:as of|at the time of|before)\s+(v?\d+\.\d+(?:\.\d+)?)/);
   if (asOf) at = releases.find(release => release.name.toLowerCase() === asOf[1])?.validFrom ?? null;
+  const relational = /\b(calls?|callers?|depends?|dependenc|owns?|owner|owned|who|upstream|downstream|impact|affect(ed|s)?|writes?|reads?|connect|runs on|talks to)\b/.test(lower) && entities.length > 0;
   const type: QueryType =
     /\bwhy\b|root cause|caused|what broke|investigate/.test(lower) ? "multi-hop"
-    : releases.length || /\b(changed|changes|release|deploy(ed|ment)?s?|since|history|introduced|when)\b/.test(lower) ? "temporal"
-    : /\b(calls?|callers?|depends?|dependenc|owns?|owner|owned|who|upstream|downstream|impact|affect(ed|s)?|writes?|reads?|connect|runs on|talks to)\b/.test(lower) && entities.length ? "relationship"
+    : releases.length || /\b(release|deploy(ed|ment)?s?|since|history|introduced|when|between)\b/.test(lower) || (/\bchang(ed|es)\b/.test(lower) && !relational) ? "temporal"
+    : relational ? "relationship"
     : /\b(where is|implemented|implementation|function|class|method|code for|defined)\b/.test(lower) || ids.some(id => /[a-z][A-Z]|_|\./.test(id)) ? "code"
     : /["`]/.test(query) || ids.some(id => id.startsWith("/")) || /\b(endpoint|route|table|column)\b/.test(lower) ? "exact"
     : entities.length ? "entity"

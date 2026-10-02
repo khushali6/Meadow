@@ -92,6 +92,34 @@ function appendJsonl(event: MeadowEvent) {
 export const bus = new EventBus();
 bus.setMaxListeners(50);
 
+/**
+ * The MCP server runs in its own process and writes events straight to the database.
+ * The daemon replays those rows on its bus so the dashboard stream and Telegram see them.
+ */
+export function startForeignEventRelay(intervalMs = 1500): () => void {
+  const local = new Set<number>();
+  const track = bus.onEvent(event => {
+    local.add(event.id);
+    if (local.size > 5000) local.delete(local.values().next().value!);
+  });
+  let last = getDb().get<{ id: number | null }>("SELECT MAX(id) id FROM events")?.id ?? 0;
+  const timer = setInterval(() => {
+    try {
+      for (const event of eventsAfter(last, undefined, 500)) {
+        last = Math.max(last, event.id);
+        if (!local.has(event.id)) bus.emit("event", event);
+      }
+    } catch {
+      // The database may be briefly locked by the other process; try again next tick.
+    }
+  }, intervalMs);
+  timer.unref();
+  return () => {
+    clearInterval(timer);
+    track();
+  };
+}
+
 export function eventsAfter(afterId: number, projectId?: number, limit = 500): MeadowEvent[] {
   const rows = projectId
     ? getDb().all<EventRow>("SELECT * FROM events WHERE id > ? AND project_id = ? ORDER BY id LIMIT ?", afterId, projectId, limit)
