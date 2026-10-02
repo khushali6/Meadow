@@ -1,21 +1,29 @@
-import { getSecret, loadConfig } from "./config";
+import { localWhisper } from "./channels/voice";
+import { getSecret, loadConfig, meadowHome } from "./config";
 import { capture, which } from "./core/exec";
 import type { DoctorReport } from "./engines/base";
 import { doctorAll, effectiveDefaultEngine } from "./engines/registry";
-import { getLlm } from "./llm/client";
+import { resolveProvider } from "./llm/catalog";
+import { chatProviderId, healthCheck, llmRouting } from "./llm/router";
+import type { HealthStep } from "./llm/types";
 import { playwrightStatus } from "./visual/capture";
 
 export type SystemCheck = { name: string; ok: boolean; optional?: boolean; detail: string; fix?: string };
 
-export async function llmStatus(): Promise<SystemCheck> {
-  const baseUrl = loadConfig().llm.baseUrl;
-  if (!getSecret("FREELLMAPI_API_KEY")) return { name: "FreeLLMAPI", ok: false, detail: `No key configured for ${baseUrl}`, fix: "Open http://127.0.0.1:3001, copy the unified key from the Keys page, then run `meadow init` (or set FREELLMAPI_API_KEY)." };
-  try {
-    const models = await getLlm().models();
-    return { name: "FreeLLMAPI", ok: true, detail: `${baseUrl} · ${models.length} models available` };
-  } catch (error) {
-    return { name: "FreeLLMAPI", ok: false, detail: (error as Error).message, fix: "Start the gateway (cd ~/freellmapi && docker compose up -d) and check the key." };
-  }
+export async function llmStatus(): Promise<SystemCheck & { provider: string; steps: HealthStep[] }> {
+  const id = chatProviderId();
+  const resolved = resolveProvider(id);
+  const fix = resolved.def.id === "freellmapi" ? "Start the gateway (cd ~/freellmapi && docker compose up -d), copy the unified key from http://127.0.0.1:3001, then run `meadow init`." : resolved.def.type === "local" ? `Start ${resolved.name} on this machine and choose a model.` : `Add your ${resolved.name} key (${resolved.def.secret}) in Runtime settings → Agent model.`;
+  const health = await healthCheck(id, { chat: false });
+  const failed = health.steps.find(step => !step.ok && !step.skipped);
+  return {
+    name: `Agent model · ${resolved.name}`,
+    ok: health.ok,
+    detail: failed ? `${failed.name}: ${failed.detail}` : `${resolved.model} · ${health.steps.filter(step => step.ok && !step.skipped).map(step => step.detail).join(" · ")}`,
+    fix: health.ok ? undefined : fix,
+    provider: id,
+    steps: health.steps,
+  };
 }
 
 export async function systemChecks(): Promise<SystemCheck[]> {
@@ -25,6 +33,10 @@ export async function systemChecks(): Promise<SystemCheck[]> {
   const gitVersion = await capture("git", ["--version"]);
   checks.push({ name: "git", ok: gitVersion.code === 0, detail: gitVersion.stdout.trim() || "not found", fix: "Install git." });
   checks.push(await llmStatus());
+  const routing = llmRouting();
+  checks.push({ name: "Memory", ok: routing.embeddings.mode !== "blocked", detail: routing.embeddings.mode === "blocked" ? routing.embeddings.reason : `Stored locally in ${meadowHome()} · embeddings: ${routing.embeddings.name}` });
+  const whisper = await localWhisper();
+  checks.push({ name: "Voice transcription", ok: routing.voice.available || Boolean(whisper), optional: true, detail: routing.voice.available ? `Via ${routing.voice.name}${whisper ? " (whisper.cpp fallback ready)" : ""}` : whisper ? "On this machine via whisper.cpp" : routing.voice.reason, fix: "Pick a provider with transcription, or install whisper.cpp + ffmpeg and set MEADOW_WHISPER_MODEL." });
   const pw = await playwrightStatus();
   checks.push({ name: "Screenshots (Playwright)", ok: pw.ok, optional: true, detail: pw.detail });
   checks.push({ name: "Telegram", ok: Boolean(getSecret("TELEGRAM_BOT_TOKEN")), optional: true, detail: getSecret("TELEGRAM_BOT_TOKEN") ? (loadConfig().telegram.ownerId ? "Bot token set, owner paired" : "Bot token set, not paired yet") : "No bot token", fix: "Create a bot with @BotFather, then run `meadow init`." });

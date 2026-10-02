@@ -2,12 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { createPairingCode } from "./meadow/channels/telegram";
-import { getSecret, loadConfig, meadowHome, saveConfig, setSecret, type EngineName } from "./meadow/config";
+import { getSecret, loadConfig, meadowHome, saveConfig, setSecret, type EngineName, type ProviderId } from "./meadow/config";
 import { getDb } from "./meadow/core/db";
 import { bus, type MeadowEvent } from "./meadow/core/events";
 import { fullDoctor, llmStatus } from "./meadow/doctor";
 import { effectiveDefaultEngine, selectableEngines } from "./meadow/engines/registry";
 import { harness } from "./meadow/harness/runner";
+import { isProviderId, PROVIDER_IDS, PROVIDERS, resolveProvider } from "./meadow/llm/catalog";
 import { formatErrors, parsePlan } from "./meadow/planning/format";
 import { approvePlan, createProject, findProject, getProject, savePlanVersion } from "./meadow/projects";
 import { exportBundle, statusText } from "./meadow/service";
@@ -15,8 +16,8 @@ import { exportBundle, statusText } from "./meadow/service";
 const HELP = `meadow — local-first agent that builds and tests code phase by phase
 
 Usage:
-  meadow init                         Guided setup (FreeLLMAPI key, engine, Telegram pairing)
-  meadow doctor                       Check engines, FreeLLMAPI, git and optional extras
+  meadow init                         Guided setup (agent provider + key, engine, Telegram pairing)
+  meadow doctor                       Check engines, agent model, memory, git and optional extras
   meadow start [--port N] [--dev]     Start the daemon (dashboard + Telegram)
   meadow run <PLAN.md> [--engine E]   Run a plan from the command line (no Telegram needed)
   meadow plan validate <PLAN.md>      Validate a plan file
@@ -63,11 +64,23 @@ async function init() {
   console.log(`Meadow setup. Everything stays on this machine (${meadowHome()}).\n`);
 
   const projectsDir = await ask("Projects folder", config.projectsDir);
-  const baseUrl = await ask("FreeLLMAPI base URL", config.llm.baseUrl);
-  saveConfig({ projectsDir, llm: { baseUrl } });
-  if (!getSecret("FREELLMAPI_API_KEY") || (await ask("Replace the stored FreeLLMAPI key? (y/N)", "n")).toLowerCase() === "y") {
-    const key = await ask("FreeLLMAPI unified key (from the Keys page at http://127.0.0.1:3001)");
-    if (key) setSecret("FREELLMAPI_API_KEY", key);
+  saveConfig({ projectsDir });
+  console.log(`\nAgent model (planning, questions, summaries). Memory always stays on this machine.\n  ${PROVIDER_IDS.map(id => `${id}${PROVIDERS[id].type === "cloud" ? " (cloud)" : PROVIDERS[id].type === "local" ? " (local)" : ""}`).join(" | ")}`);
+  let provider = await ask("Provider", config.llm.provider);
+  if (!isProviderId(provider)) {
+    console.log(`  Unknown provider ${provider}. Using freellmapi.`);
+    provider = "freellmapi";
+  }
+  const def = PROVIDERS[provider as ProviderId];
+  const current = resolveProvider(def.id);
+  const settings: Record<string, string> = {};
+  if (def.type !== "cloud") settings.baseUrl = await ask(`${def.name} base URL`, current.baseUrl);
+  settings.model = await ask("Chat model", current.model || def.defaults.model);
+  if (def.id === "freellmapi") saveConfig({ llm: { provider: def.id, ...settings } });
+  else saveConfig({ llm: { provider: def.id, providers: { [def.id]: settings } } });
+  if (def.secret && (!getSecret(def.secret) || (await ask(`Replace the stored ${def.name} key? (y/N)`, "n")).toLowerCase() === "y")) {
+    const key = await ask(`${def.name} API key${def.keyRequired ? "" : " (optional)"} — ${def.keyHint}`);
+    if (key) setSecret(def.secret, key);
   }
   const llm = await llmStatus();
   console.log(`  ${mark(llm.ok)} ${llm.detail}`);
@@ -180,7 +193,7 @@ async function atlas(args: string[]): Promise<number> {
     off();
     console.log(`\n${result.answer}\n`);
     for (const e of result.evidence) console.log(`  [${e.n}] ${e.title}${e.path ? ` — ${e.path}` : ""}`);
-    console.log(`\nVerifier: ${result.verifier.supported}/${result.verifier.total} claims supported · ${result.writer === "llm" ? "LLM writer" : "rule-based writer (FreeLLMAPI unavailable)"} · ${result.ms} ms`);
+    console.log(`\nVerifier: ${result.verifier.supported}/${result.verifier.total} claims supported · ${result.writer === "llm" ? "LLM writer" : "rule-based writer (agent model unavailable)"} · ${result.ms} ms`);
     for (const finding of result.findings) console.log(`Path: ${finding.text}`);
     return 0;
   }

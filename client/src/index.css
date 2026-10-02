@@ -775,3 +775,19 @@ button.cite-chip:hover { background: var(--sun); }
 @media (max-width: 1180px) { .atlas-layout, .atlas-bottom { grid-template-columns: minmax(0, 1fr); } .atlas-counts { grid-template-columns: repeat(5, minmax(0, 1fr)); } .atlas-counts > div { border-bottom: 1px solid var(--line); } }
 @media (max-width: 820px) { .map-shell { grid-template-columns: minmax(0, 1fr); height: auto; } .map-canvas { height: 60vh; } .map-detail { width: auto; border-left: 0; border-top: 1px solid var(--ink); height: auto; } .atlas-scores { grid-template-columns: repeat(2, minmax(0, 1fr)); } .atlas-claims li, .atlas-trace-list li { grid-template-columns: minmax(0, 1fr); gap: 4px; } .atlas-tool-list li { grid-template-columns: minmax(0, 1fr) auto; } .atlas-tool-list li > span:last-child { grid-column: 1 / -1; } }
 .map-overlay > div:first-child { flex: 1; display: grid; gap: 4px; min-width: 0; }
+
+/* Agent model providers */
+.provider-tabs { display: flex; flex-wrap: wrap; gap: 0; border: 1px solid var(--ink); margin: 6px 0 10px; }
+.provider-tab { display: inline-flex; align-items: center; gap: 6px; border: 0; border-right: 1px solid var(--line-strong); background: transparent; color: var(--muted); padding: 8px 10px; font: 9px ui-monospace, monospace; text-transform: uppercase; letter-spacing: .04em; cursor: pointer; }
+.provider-tab:last-child { border-right: 0; }
+.provider-tab:hover { background: var(--light); color: var(--ink); }
+.provider-tab.active { background: var(--ink); color: var(--paper); }
+.provider-tab em { font-style: normal; color: var(--sun); }
+.provider-dot { width: 5px; height: 5px; background: var(--line-strong); }
+.provider-tab.ready .provider-dot { background: #4d7c4f; }
+.capability-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
+.capability-kind { padding: 3px 6px; background: var(--ink); color: var(--paper); font: 9px ui-monospace, monospace; text-transform: uppercase; }
+.capability { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; border: 1px solid var(--line-strong); font: 9px ui-monospace, monospace; text-transform: uppercase; }
+.capability.yes { color: #3f6b41; border-color: #9fbea0; }
+.capability.no { color: var(--muted); opacity: .7; text-decoration: line-through; }
+.doctor-foot { padding: 6px 2px 0; color: var(--muted); font: 9px ui-monospace, monospace; text-transform: uppercase; }

@@ -10,8 +10,7 @@ export function tempHome() {
   process.env.MEADOW_HOME = path.join(root, "home");
   process.env.MEADOW_PROJECTS_DIR = path.join(root, "projects");
   process.env.MEADOW_NO_JSONL = "1";
-  delete process.env.FREELLMAPI_API_KEY;
-  delete process.env.TELEGRAM_BOT_TOKEN;
+  for (const name of ["FREELLMAPI_API_KEY", "AGENT_OPENAI_API_KEY", "AGENT_GEMINI_API_KEY", "AGENT_ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "LLM_API_KEY", "TELEGRAM_BOT_TOKEN", "MEADOW_LLM_PROVIDER", "MEADOW_ALLOW_REMOTE_LLM"]) delete process.env[name];
   fs.mkdirSync(process.env.MEADOW_HOME, { recursive: true });
   resetConfigCache();
   const db = new Db(":memory:");

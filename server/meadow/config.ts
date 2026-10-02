@@ -5,11 +5,30 @@ import path from "node:path";
 export type EngineName = "cursor" | "claude_code" | "codex" | "gemini" | "custom" | "fake";
 export type NotificationLevel = "all" | "phases" | "failures";
 export type PhaseGate = "auto" | "ask";
+export type ProviderId = "freellmapi" | "openai" | "gemini" | "anthropic" | "openrouter" | "ollama" | "lmstudio" | "custom";
+export type ProviderSettings = { baseUrl?: string; model?: string; embeddingModel?: string; transcriptionModel?: string };
 
 export type MeadowConfig = {
   projectsDir: string;
   server: { host: string; port: number };
-  llm: { baseUrl: string; model: string; embeddingModel: string; transcriptionModel: string; timeoutMs: number };
+  llm: {
+    /** Provider used by the agent for chat (planning, questions, summaries, CodeAtlas). */
+    provider: ProviderId;
+    /** FreeLLMAPI settings (kept at this level for older configs). */
+    baseUrl: string;
+    model: string;
+    embeddingModel: string;
+    transcriptionModel: string;
+    timeoutMs: number;
+    /** Settings for every other provider; missing fields use the provider's defaults. */
+    providers: Partial<Record<ProviderId, ProviderSettings>>;
+    /** Generic OpenAI-compatible endpoint. Remote URLs need allowRemote. */
+    custom: { label: string; allowRemote: boolean; embeddings: boolean; transcription: boolean; jsonMode: boolean };
+    /** Who transcribes voice notes: the chat provider when it can ("auto"), a specific provider, or nobody. */
+    transcriptionProvider: ProviderId | "auto" | "off";
+  };
+  /** Memory (code index, notes, CodeAtlas vectors) is stored locally. Embeddings are computed locally unless a local provider is chosen. */
+  memory: { embeddings: "local" | "provider"; embeddingProvider: ProviderId | null };
   engine: {
     default: EngineName;
     /** Fallback model when an engine has no entry in `models`. */
@@ -44,7 +63,18 @@ export type MeadowConfig = {
 export const DEFAULT_CONFIG: MeadowConfig = {
   projectsDir: path.join(os.homedir(), "meadow-projects"),
   server: { host: "127.0.0.1", port: 7777 },
-  llm: { baseUrl: "http://127.0.0.1:3001/v1", model: "auto", embeddingModel: "auto", transcriptionModel: "auto", timeoutMs: 120_000 },
+  llm: {
+    provider: "freellmapi",
+    baseUrl: "http://127.0.0.1:3001/v1",
+    model: "auto",
+    embeddingModel: "auto",
+    transcriptionModel: "auto",
+    timeoutMs: 120_000,
+    providers: {},
+    custom: { label: "OpenAI-compatible", allowRemote: false, embeddings: false, transcription: false, jsonMode: false },
+    transcriptionProvider: "auto",
+  },
+  memory: { embeddings: "local", embeddingProvider: null },
   engine: { default: "cursor", model: null, models: {}, runTimeoutS: 45 * 60, noOutputTimeoutS: 5 * 60, claudeUseFreeLlmApi: false, custom: { label: "Custom command", command: "" } },
   harness: { maxAttempts: 3, checkTimeoutS: 600, massDeleteThreshold: 20, phaseGate: "auto" },
   budget: { phaseTokens: 2_000_000, dailyTokens: 20_000_000, phaseWallClockS: 90 * 60 },
@@ -88,6 +118,7 @@ function envOverrides(config: MeadowConfig): MeadowConfig {
   if (env.MEADOW_PORT) next.server.port = Number(env.MEADOW_PORT);
   if (env.FREELLMAPI_BASE_URL) next.llm.baseUrl = env.FREELLMAPI_BASE_URL;
   if (env.MEADOW_LLM_MODEL) next.llm.model = env.MEADOW_LLM_MODEL;
+  if (env.MEADOW_LLM_PROVIDER) next.llm.provider = env.MEADOW_LLM_PROVIDER as ProviderId;
   if (env.MEADOW_ENGINE) next.engine.default = env.MEADOW_ENGINE as EngineName;
   return next;
 }
@@ -132,8 +163,11 @@ export function resetConfigCache() {
 }
 
 /** Secrets come only from the environment or ~/.meadow/secrets.env (0600), never from config.json. */
-export type SecretName = "FREELLMAPI_API_KEY" | "TELEGRAM_BOT_TOKEN" | "CURSOR_API_KEY" | "ANTHROPIC_API_KEY" | "OPENAI_API_KEY" | "GEMINI_API_KEY" | "GITHUB_TOKEN" | "JIRA_API_TOKEN" | "LINEAR_API_KEY";
-export const SECRET_NAMES: SecretName[] = ["FREELLMAPI_API_KEY", "TELEGRAM_BOT_TOKEN", "CURSOR_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GITHUB_TOKEN", "JIRA_API_TOKEN", "LINEAR_API_KEY"];
+/** Agent provider keys (AGENT_*, OPENROUTER_API_KEY, LLM_API_KEY) are separate from the coding-engine keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, CURSOR_API_KEY). */
+export type AgentSecretName = "FREELLMAPI_API_KEY" | "AGENT_OPENAI_API_KEY" | "AGENT_GEMINI_API_KEY" | "AGENT_ANTHROPIC_API_KEY" | "OPENROUTER_API_KEY" | "LLM_API_KEY";
+export type SecretName = AgentSecretName | "TELEGRAM_BOT_TOKEN" | "CURSOR_API_KEY" | "ANTHROPIC_API_KEY" | "OPENAI_API_KEY" | "GEMINI_API_KEY" | "GITHUB_TOKEN" | "JIRA_API_TOKEN" | "LINEAR_API_KEY";
+export const AGENT_SECRET_NAMES: AgentSecretName[] = ["FREELLMAPI_API_KEY", "AGENT_OPENAI_API_KEY", "AGENT_GEMINI_API_KEY", "AGENT_ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "LLM_API_KEY"];
+export const SECRET_NAMES: SecretName[] = [...AGENT_SECRET_NAMES, "TELEGRAM_BOT_TOKEN", "CURSOR_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GITHUB_TOKEN", "JIRA_API_TOKEN", "LINEAR_API_KEY"];
 
 function readSecretsFile(): Record<string, string> {
   try {

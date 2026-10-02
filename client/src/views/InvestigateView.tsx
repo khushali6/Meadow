@@ -88,7 +88,7 @@ function IndexStrip({ projectId, onNavigate }: { projectId: number; onNavigate: 
         <div><span className="panel-kicker">01 / Knowledge graph</span><h2>{graph?.lastIngest ? `Indexed ${relativeTime(graph.lastIngest.at)}` : "Not indexed yet"}</h2></div>
         <div className="atlas-index-actions">
           <ActivityDot active={Boolean(busy)} tone={busy ? "amber" : "idle"} />
-          <span className="atlas-meta">{status.data ? `${status.data.llm.available ? "FreeLLMAPI on" : "rule-based (no LLM)"} · ${graph?.embedded ? "gateway vectors" : "local hashed vectors"}` : "…"}</span>
+          <span className="atlas-meta">{status.data ? `${status.data.llm.available ? `${status.data.llm.provider} on` : "rule-based (no LLM)"} · ${graph?.embedded ? "model vectors" : "local hashed vectors"}` : "…"}</span>
           <MotionButton className="button secondary" onClick={() => onNavigate("/map")}><Network size={14} /> System map</MotionButton>
           <MotionButton className="button primary" disabled={busy} onClick={() => ingest.mutate({ projectId })}><RefreshCw size={14} className={busy ? "spin-slow" : undefined} /> {busy ? "Indexing…" : graph?.lastIngest ? "Re-index" : "Build graph"}</MotionButton>
         </div>
@@ -146,7 +146,7 @@ function ResultPanels({ result, projectId, onNavigate }: { result: AtlasInvestig
     <>
       <section className="panel atlas-answer">
         <div className="panel-heading">
-          <div><span className="panel-kicker">04 / Answer · {result.writer === "llm" ? "FreeLLMAPI writer" : "rule-based writer"} · {result.classification?.type ?? "query"}</span><h2>{result.question}</h2></div>
+          <div><span className="panel-kicker">04 / Answer · {result.writer === "llm" ? "LLM writer" : "rule-based writer"} · {result.classification?.type ?? "query"}</span><h2>{result.question}</h2></div>
           {v ? <div className={`verifier-badge ${v.supported === v.total ? "ok" : "warn"}`}><CheckCircle2 size={14} /> {v.supported}/{v.total} claims verified</div> : null}
         </div>
         <RichText text={result.answer || result.error || ""} onCite={cite} />
@@ -335,7 +335,7 @@ export function InvestigateView({ project, onNavigate }: { project: ProjectSumma
       <PageHeader
         eyebrow={`07 / CODEATLAS · ${project.name}`}
         title="Ask your system."
-        description="Questions run through a planner, hybrid retrieval over a temporal knowledge graph, tool calls, a cited writer and a verifier. Everything stays on this machine; only the LLM call goes to your FreeLLMAPI gateway."
+        description="Questions run through a planner, hybrid retrieval over a temporal knowledge graph, tool calls, a cited writer and a verifier. Everything stays on this machine; only the prompt and selected snippets go to the agent model you picked."
         action={<MotionButton className="button secondary" disabled={demo.isPending} onClick={() => demo.mutate()}><Sparkles size={14} /> {demo.isPending ? "Generating…" : "AcmePay demo"}</MotionButton>}
       />
       <ErrorNote error={demo.error} />

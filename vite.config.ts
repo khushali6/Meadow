@@ -17,6 +17,17 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return undefined;
+          if (/node_modules[\\/](react|react-dom|scheduler|wouter)[\\/]/.test(id)) return "react";
+          if (/@trpc|@tanstack|superjson|zod/.test(id)) return "data";
+          if (/gsap|animejs|motion|framer-motion/.test(id)) return "motion";
+          return undefined;
+        },
+      },
+    },
   },
   server: {
     host: "127.0.0.1",

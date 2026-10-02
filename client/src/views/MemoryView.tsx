@@ -25,7 +25,7 @@ export function MemoryView({ project }: { project: ProjectSummary | undefined })
         description="Notes and project code are indexed locally so prompts get the right context. .env files, keys, and credentials are never indexed."
         action={project ? <MotionButton className="button secondary" disabled={reindex.isPending} onClick={() => reindex.mutate({ projectId: project.id })}><RefreshCw size={15} className={reindex.isPending ? "spin-slow" : undefined} /> {reindex.isPending ? "Indexing…" : "Re-index project"}</MotionButton> : undefined}
       />
-      {reindex.data ? <div className="banner ok"><div><strong>Indexed {reindex.data.files} files into {reindex.data.chunks} chunks</strong><span>{reindex.data.embedded ? "Embeddings came from FreeLLMAPI." : "FreeLLMAPI embeddings were unavailable, so search uses keyword matching."}</span></div></div> : null}
+      {reindex.data ? <div className="banner ok"><div><strong>Indexed {reindex.data.files} files into {reindex.data.chunks} chunks</strong><span>{reindex.data.embedded ? "Embeddings were computed on this machine." : "Search uses keyword matching."}</span></div></div> : null}
       <ErrorNote error={reindex.error ?? addNote.error ?? results.error} />
       <div className="memory-layout">
         <section className="panel">

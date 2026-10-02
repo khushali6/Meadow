@@ -1,21 +1,29 @@
-import { getSecret } from "../config";
+import { isConfigured, resolveProvider } from "../llm/catalog";
 import { getLlm, LlmError, type ChatMessage, type ChatOptions } from "../llm/client";
+import { chatProviderId } from "../llm/router";
 
 const COOLDOWN_MS = 60_000;
 let failedAt = 0;
+let cooldownMs = COOLDOWN_MS;
 let lastError = "";
 
 export type LlmUsage = { calls: number; tokensIn: number; tokensOut: number };
 export const emptyUsage = (): LlmUsage => ({ calls: 0, tokensIn: 0, tokensOut: 0 });
 
-/** True when the gateway has a key and has not failed recently. Every caller must have a deterministic fallback. */
+/** True when the agent provider is configured and has not failed recently. Every caller must have a deterministic fallback. */
 export function llmAvailable(): boolean {
   if (process.env.MEADOW_ATLAS_NO_LLM) return false;
-  if (!getSecret("FREELLMAPI_API_KEY") && !process.env.MEADOW_ATLAS_FORCE_LLM) return false;
-  return Date.now() - failedAt > COOLDOWN_MS;
+  if (!process.env.MEADOW_ATLAS_FORCE_LLM && !isConfigured(chatProviderId())) return false;
+  return Date.now() - failedAt > cooldownMs;
 }
 
-export const llmStatus = () => ({ available: llmAvailable(), lastError: lastError || null });
+function noteFailure(error: unknown) {
+  failedAt = Date.now();
+  cooldownMs = error instanceof LlmError && error.type === "QUOTA" ? 10 * 60_000 : error instanceof LlmError && error.retryAfterMs ? Math.max(error.retryAfterMs, 5_000) : COOLDOWN_MS;
+  lastError = error instanceof LlmError ? `${error.type}: ${error.message}` : String((error as Error)?.message ?? error);
+}
+
+export const llmStatus = () => ({ available: llmAvailable(), provider: resolveProvider(chatProviderId()).name, lastError: lastError || null });
 
 export async function tryChat(messages: ChatMessage[], usage: LlmUsage, options: ChatOptions = {}): Promise<string | null> {
   if (!llmAvailable()) return null;
@@ -26,8 +34,7 @@ export async function tryChat(messages: ChatMessage[], usage: LlmUsage, options:
     usage.tokensOut += result.tokensOut;
     return result.text;
   } catch (error) {
-    failedAt = Date.now();
-    lastError = error instanceof LlmError ? error.message : String(error);
+    noteFailure(error);
     return null;
   }
 }
@@ -49,8 +56,7 @@ export async function tryEmbed(texts: string[]): Promise<number[][] | null> {
   try {
     return await getLlm().embed(texts);
   } catch (error) {
-    failedAt = Date.now();
-    lastError = String((error as Error).message ?? error);
+    if (!(error instanceof LlmError && error.type === "UNSUPPORTED")) noteFailure(error);
     return null;
   }
 }

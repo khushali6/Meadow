@@ -9,6 +9,8 @@ import { telegram, createPairingCode } from "./meadow/channels/telegram";
 import { getSecret, loadConfig, saveConfig, setSecret } from "./meadow/config";
 import { decide, listApprovals } from "./meadow/core/approvals";
 import { fullDoctor, llmStatus } from "./meadow/doctor";
+import { PROVIDERS } from "./meadow/llm/catalog";
+import { healthCheck, llmRouting, providerFor, providerSummaries } from "./meadow/llm/router";
 import { assertSelectableEngine, engineInfo } from "./meadow/engines/registry";
 import { harness } from "./meadow/harness/runner";
 import { handleAction, handleText } from "./meadow/intake/conversation";
@@ -21,13 +23,26 @@ import { captureOnDemand } from "./meadow/visual/ondemand";
 
 const DASHBOARD = { channel: "dashboard", chat: "local" } as const;
 
+const providerId = z.enum(["freellmapi", "openai", "gemini", "anthropic", "openrouter", "ollama", "lmstudio", "custom"]);
+const providerSettings = z.object({ baseUrl: z.string().url().max(300), model: z.string().max(200), embeddingModel: z.string().max(200), transcriptionModel: z.string().max(200) }).partial();
+
 const configPatch = z.object({
   engine: z.object({ default: z.enum(["cursor", "claude_code", "codex", "gemini", "custom", "fake"]), model: z.string().nullable(), models: z.record(z.string(), z.string().max(120).nullable()), runTimeoutS: z.number().min(60).max(6 * 3600), noOutputTimeoutS: z.number().min(30).max(3600), claudeUseFreeLlmApi: z.boolean() }).partial().optional(),
   harness: z.object({ maxAttempts: z.number().int().min(1).max(10), checkTimeoutS: z.number().min(10).max(7200), massDeleteThreshold: z.number().int().min(1), phaseGate: z.enum(["auto", "ask"]) }).partial().optional(),
   budget: z.object({ phaseTokens: z.number().int().min(1000), dailyTokens: z.number().int().min(1000), phaseWallClockS: z.number().int().min(60) }).partial().optional(),
   telegram: z.object({ notificationLevel: z.enum(["all", "phases", "failures"]), quietHours: z.object({ enabled: z.boolean(), start: z.number().int().min(0).max(23), end: z.number().int().min(0).max(23) }), voiceReplies: z.boolean() }).partial().optional(),
   screenshots: z.object({ enabled: z.boolean() }).partial().optional(),
-  llm: z.object({ baseUrl: z.string().url(), model: z.string().min(1) }).partial().optional(),
+  llm: z.object({
+    provider: providerId,
+    baseUrl: z.string().url(),
+    model: z.string().min(1).max(200),
+    embeddingModel: z.string().max(200),
+    transcriptionModel: z.string().max(200),
+    providers: z.partialRecord(providerId, providerSettings),
+    custom: z.object({ label: z.string().max(60), allowRemote: z.boolean(), embeddings: z.boolean(), transcription: z.boolean(), jsonMode: z.boolean() }).partial(),
+    transcriptionProvider: z.union([providerId, z.literal("auto"), z.literal("off")]),
+  }).partial().optional(),
+  memory: z.object({ embeddings: z.enum(["local", "provider"]), embeddingProvider: providerId.nullable() }).partial().optional(),
   approvals: z.object({ expiryS: z.number().int().min(60) }).partial().optional(),
   atlas: z.object({
     rerank: z.boolean(),
@@ -57,6 +72,20 @@ const atlasRouter = router({
   demo: publicProcedure.mutation(() => createDemo()),
   mcpConfig: publicProcedure.query(() => mcpConfigSnippet(path.resolve(process.argv[1] ?? "dist/cli.js"))),
 });
+
+/** Memory stays local: embeddings may only come from a provider that runs on this machine. Cloud base URLs are fixed. */
+function validateLlmPatch(input: z.infer<typeof configPatch>) {
+  for (const [id, settings] of Object.entries(input.llm?.providers ?? {})) {
+    if (settings?.baseUrl && PROVIDERS[id as keyof typeof PROVIDERS]?.type === "cloud") throw new Error(`${PROVIDERS[id as keyof typeof PROVIDERS].name} always uses its official endpoint.`);
+  }
+  if (input.memory?.embeddings === "provider" || input.memory?.embeddingProvider) {
+    const current = loadConfig();
+    const id = input.memory.embeddingProvider ?? current.memory.embeddingProvider ?? input.llm?.provider ?? current.llm.provider;
+    const def = PROVIDERS[id];
+    const allowRemote = input.llm?.custom?.allowRemote ?? current.llm.custom.allowRemote;
+    if (def.type === "cloud" || (def.id === "custom" && allowRemote)) throw new Error(`Memory stays on this machine, so ${def.name} can't compute embeddings. Choose local embeddings, FreeLLMAPI, Ollama or LM Studio.`);
+  }
+}
 
 function safeSettings() {
   const config = loadConfig();
@@ -139,10 +168,11 @@ export const appRouter = router({
   settings: publicProcedure.query(() => safeSettings()),
   updateSettings: publicProcedure.input(configPatch).mutation(({ input }) => {
     if (input.engine?.default) assertSelectableEngine(input.engine.default);
+    validateLlmPatch(input);
     saveConfig(input);
     return safeSettings();
   }),
-  setSecret: publicProcedure.input(z.object({ name: z.enum(["FREELLMAPI_API_KEY", "TELEGRAM_BOT_TOKEN", "GITHUB_TOKEN", "JIRA_API_TOKEN", "LINEAR_API_KEY"]), value: z.string().min(8).max(500) })).mutation(async ({ input }) => {
+  setSecret: publicProcedure.input(z.object({ name: z.enum(["FREELLMAPI_API_KEY", "AGENT_OPENAI_API_KEY", "AGENT_GEMINI_API_KEY", "AGENT_ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "LLM_API_KEY", "TELEGRAM_BOT_TOKEN", "GITHUB_TOKEN", "JIRA_API_TOKEN", "LINEAR_API_KEY"]), value: z.string().min(8).max(500) })).mutation(async ({ input }) => {
     setSecret(input.name, input.value.trim());
     if (input.name === "TELEGRAM_BOT_TOKEN") {
       telegram.stop();
@@ -154,6 +184,17 @@ export const appRouter = router({
   exportRun: publicProcedure.input(z.object({ projectId: z.number() })).mutation(({ input }) => exportBundle(input.projectId)),
   doctor: publicProcedure.query(() => fullDoctor()),
   llmStatus: publicProcedure.query(() => llmStatus()),
+  llm: router({
+    providers: publicProcedure.query(() => ({ providers: providerSummaries(), routing: llmRouting(), transcriptionProvider: loadConfig().llm.transcriptionProvider, memory: loadConfig().memory, custom: loadConfig().llm.custom })),
+    test: publicProcedure.input(z.object({ provider: providerId })).mutation(({ input }) => healthCheck(input.provider)),
+    models: publicProcedure.input(z.object({ provider: providerId })).query(async ({ input }) => {
+      try {
+        return { models: (await providerFor(input.provider).models()).slice(0, 300), error: null };
+      } catch (error) {
+        return { models: [] as string[], error: (error as Error).message };
+      }
+    }),
+  }),
   atlas: atlasRouter,
 });
 

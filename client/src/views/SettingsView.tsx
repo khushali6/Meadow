@@ -31,10 +31,12 @@ function NumberInput({ value, onCommit, min, step = 1, suffix }: { value: number
   );
 }
 
-function SecretField({ name, present, label, placeholder }: { name: "FREELLMAPI_API_KEY" | "TELEGRAM_BOT_TOKEN" | "GITHUB_TOKEN" | "JIRA_API_TOKEN" | "LINEAR_API_KEY"; present: boolean; label: string; placeholder: string }) {
+type SecretName = Parameters<ReturnType<typeof trpc.setSecret.useMutation>["mutate"]>[0]["name"];
+
+function SecretField({ name, present, label, placeholder }: { name: SecretName; present: boolean; label: string; placeholder: string }) {
   const utils = trpc.useUtils();
   const [value, setValue] = useState("");
-  const save = trpc.setSecret.useMutation({ onSuccess: () => { setValue(""); utils.settings.invalidate(); utils.llmStatus.invalidate(); utils.overview.invalidate(); utils.doctor.invalidate(); utils.atlas.status.invalidate(); } });
+  const save = trpc.setSecret.useMutation({ onSuccess: () => { setValue(""); utils.settings.invalidate(); utils.llmStatus.invalidate(); utils.llm.providers.invalidate(); utils.overview.invalidate(); utils.doctor.invalidate(); utils.atlas.status.invalidate(); } });
   return (
     <div className="secret-field">
       <Row label={label} hint={present ? "Stored in ~/.meadow/secrets.env (owner-only file). Never shown again." : "Not set"}>
@@ -49,11 +51,105 @@ function SecretField({ name, present, label, placeholder }: { name: "FREELLMAPI_
   );
 }
 
+type ProviderId = NonNullable<NonNullable<Patch["llm"]>["provider"]>;
+const CAPABILITY_LABELS = [["chat", "Chat"], ["jsonMode", "JSON mode"], ["streaming", "Streaming"], ["embeddings", "Embeddings"], ["transcription", "Voice"]] as const;
+
+function AgentModelSection({ patch }: { patch: (value: Patch) => void }) {
+  const utils = trpc.useUtils();
+  const data = trpc.llm.providers.useQuery(undefined, { refetchOnWindowFocus: false });
+  const [viewing, setViewing] = useState<ProviderId | null>(null);
+  const active = data.data?.routing.chat.id as ProviderId | undefined;
+  const selectedId = viewing ?? active;
+  const selected = data.data?.providers.find(provider => provider.id === selectedId);
+  const models = trpc.llm.models.useQuery({ provider: selectedId ?? "freellmapi" }, { enabled: Boolean(selected?.configured), refetchOnWindowFocus: false, retry: false });
+  const test = trpc.llm.test.useMutation();
+  const save = (value: Patch) => { patch(value); setTimeout(() => { utils.llm.providers.invalidate(); utils.llmStatus.invalidate(); }, 150); };
+  if (!data.data || !selected) return <Section title="Agent model" description="Loading providers…"><Loader2 size={14} className="spin-slow" /></Section>;
+  const { routing, memory, custom, transcriptionProvider, providers } = data.data;
+  const providerPatch = (field: "baseUrl" | "model" | "embeddingModel" | "transcriptionModel", value: string) => {
+    if (selected.id === "freellmapi") save({ llm: { [field]: value } });
+    else save({ llm: { providers: { [selected.id]: { [field]: value } } } });
+  };
+  const localEmbedders = providers.filter(provider => provider.type !== "cloud" && provider.capabilities.embeddings && !(provider.id === "custom" && custom.allowRemote));
+  const voiceProviders = providers.filter(provider => provider.capabilities.transcription);
+  const step = test.data && test.variables?.provider === selected.id ? test.data : null;
+
+  return (
+    <Section title="Agent model" description="Planning, clarifying questions, summaries and CodeAtlas answers. Pick any provider; memory (index, notes, graph, embeddings) always stays on this machine. Cloud providers only see the prompt text and the snippets Meadow selects.">
+      <Row label="Active provider" hint={routing.chat.configured ? `${routing.chat.name} · ${routing.chat.model}` : `${routing.chat.name} is not configured yet.`}>
+        <select value={active} onChange={event => { setViewing(null); save({ llm: { provider: event.target.value as ProviderId } }); }} aria-label="Active provider">
+          {providers.map(provider => <option key={provider.id} value={provider.id}>{provider.name}{provider.type === "cloud" ? " (cloud)" : provider.type === "local" ? " (local)" : ""}{provider.configured ? "" : " — needs setup"}</option>)}
+        </select>
+      </Row>
+      <div className="provider-tabs" role="tablist" aria-label="Configure provider">
+        {providers.map(provider => (
+          <button key={provider.id} role="tab" aria-selected={provider.id === selected.id} className={`provider-tab ${provider.id === selected.id ? "active" : ""} ${provider.configured ? "ready" : ""}`} onClick={() => setViewing(provider.id as ProviderId)}>
+            <span className="provider-dot" />{provider.name}{provider.id === active ? <em>active</em> : null}
+          </button>
+        ))}
+      </div>
+      <div className="capability-row" aria-label={`${selected.name} capabilities`}>
+        <span className="capability-kind">{selected.type}</span>
+        {CAPABILITY_LABELS.map(([key, label]) => <span key={key} className={`capability ${selected.capabilities[key] ? "yes" : "no"}`}>{selected.capabilities[key] ? <CheckCircle2 size={10} /> : <XCircle size={10} />}{label}</span>)}
+      </div>
+      <Row label="Endpoint" hint={selected.baseUrlEditable ? (selected.type === "local" ? "Must be a localhost address." : custom.allowRemote ? "Remote endpoints allowed for this provider." : "Localhost unless you allow remote below.") : "Official endpoint, HTTPS only."}>
+        {selected.baseUrlEditable ? <input key={`${selected.id}-url`} className="text-input" defaultValue={selected.baseUrl} onBlur={event => event.target.value.trim() && event.target.value.trim() !== selected.baseUrl && providerPatch("baseUrl", event.target.value.trim())} /> : <code className="inline-code">{selected.baseUrl}</code>}
+      </Row>
+      <Row label="Chat model" hint={models.data?.error ? `Couldn't list models: ${models.data.error}` : models.data?.models.length ? `${models.data.models.length} models available` : `Default: ${selected.defaults.model}`}>
+        <input key={`${selected.id}-model`} className="text-input" list={`models-${selected.id}`} defaultValue={selected.model} onBlur={event => event.target.value.trim() && event.target.value.trim() !== selected.model && providerPatch("model", event.target.value.trim())} />
+        <datalist id={`models-${selected.id}`}>{models.data?.models.map(model => <option key={model} value={model} />)}</datalist>
+      </Row>
+      {selected.capabilities.embeddings ? <Row label="Embedding model"><input key={`${selected.id}-emb`} className="text-input" defaultValue={selected.embeddingModel ?? ""} onBlur={event => event.target.value.trim() !== (selected.embeddingModel ?? "") && providerPatch("embeddingModel", event.target.value.trim())} /></Row> : null}
+      {selected.capabilities.transcription ? <Row label="Transcription model"><input key={`${selected.id}-stt`} className="text-input" defaultValue={selected.transcriptionModel ?? ""} onBlur={event => event.target.value.trim() !== (selected.transcriptionModel ?? "") && providerPatch("transcriptionModel", event.target.value.trim())} /></Row> : null}
+      {selected.id === "custom" ? (
+        <>
+          <Row label="Allow remote endpoint" hint="Off keeps the custom endpoint on localhost. Remote endpoints can't compute memory embeddings."><Toggle checked={custom.allowRemote} onChange={value => save({ llm: { custom: { allowRemote: value } } })} label="Allow remote endpoint" /></Row>
+          <Row label="Supports embeddings"><Toggle checked={custom.embeddings} onChange={value => save({ llm: { custom: { embeddings: value } } })} label="Supports embeddings" /></Row>
+          <Row label="Supports transcription"><Toggle checked={custom.transcription} onChange={value => save({ llm: { custom: { transcription: value } } })} label="Supports transcription" /></Row>
+          <Row label="Supports JSON mode"><Toggle checked={custom.jsonMode} onChange={value => save({ llm: { custom: { jsonMode: value } } })} label="Supports JSON mode" /></Row>
+        </>
+      ) : null}
+      {selected.secret ? <SecretField key={selected.secret} name={selected.secret as SecretName} present={selected.keySet} label={`${selected.name} API key${selected.keyRequired ? "" : " (optional)"}`} placeholder={selected.keyHint ?? "Paste your API key"} /> : null}
+      <Row label="Test connection" hint="Checks credentials, endpoint, model, a tiny chat, embeddings and voice support.">
+        <MotionButton className="button secondary" onClick={() => test.mutate({ provider: selected.id as ProviderId })} disabled={test.isPending}>{test.isPending ? <Loader2 size={14} className="spin-slow" /> : <Stethoscope size={14} />} {test.isPending ? "Testing…" : `Test ${selected.name}`}</MotionButton>
+      </Row>
+      <ErrorNote error={test.error} />
+      {step ? (
+        <div className="doctor-list">
+          {step.steps.map(item => (
+            <div className={`doctor-row ${item.ok ? "ok" : item.skipped ? "optional" : "bad"}`} key={item.name}>
+              {item.ok ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
+              <div><strong>{item.name}</strong><span>{item.detail}</span></div>
+            </div>
+          ))}
+          <div className="doctor-foot">{step.ok ? "Ready" : "Not ready"} · {step.ms} ms</div>
+        </div>
+      ) : null}
+      <Row label="Memory embeddings" hint={routing.embeddings.mode === "blocked" ? routing.embeddings.reason : `Now: ${routing.embeddings.name}. Local hashing needs no model and never leaves this machine.`}>
+        <select value={memory.embeddings === "local" ? "local" : memory.embeddingProvider ?? "auto"} onChange={event => {
+          const value = event.target.value;
+          if (value === "local") save({ memory: { embeddings: "local", embeddingProvider: null } });
+          else save({ memory: { embeddings: "provider", embeddingProvider: value as ProviderId } });
+        }} aria-label="Memory embeddings">
+          <option value="local">Local, built in (recommended)</option>
+          {localEmbedders.map(provider => <option key={provider.id} value={provider.id} disabled={!provider.configured}>{provider.name}{provider.configured ? "" : " — needs setup"}</option>)}
+        </select>
+      </Row>
+      <Row label="Voice transcription" hint={routing.voice.available ? `Now: ${routing.voice.name}` : routing.voice.reason}>
+        <select value={transcriptionProvider} onChange={event => save({ llm: { transcriptionProvider: event.target.value as ProviderId | "auto" | "off" } })} aria-label="Voice transcription">
+          <option value="auto">Automatic</option>
+          {voiceProviders.map(provider => <option key={provider.id} value={provider.id}>{provider.name}{provider.type === "cloud" ? " (audio leaves this machine)" : ""}</option>)}
+          <option value="off">Off</option>
+        </select>
+      </Row>
+    </Section>
+  );
+}
+
 export function SettingsView({ settings, overview, project }: { settings: Settings | undefined; overview: Overview | undefined; project: ProjectSummary | undefined }) {
   const utils = trpc.useUtils();
   const update = trpc.updateSettings.useMutation({ onSuccess: data => utils.settings.setData(undefined, data) });
   const updateProject = trpc.updateProject.useMutation({ onSuccess: () => { utils.overview.invalidate(); utils.project.invalidate(); } });
-  const llm = trpc.llmStatus.useQuery(undefined, { refetchOnWindowFocus: false });
   const doctor = trpc.doctor.useQuery(undefined, { enabled: false });
   const pair = trpc.pairTelegram.useMutation();
   const exportRun = trpc.exportRun.useMutation({ onSuccess: data => downloadJson(`${data.project.name}-run-export.json`, data) });
@@ -66,20 +162,11 @@ export function SettingsView({ settings, overview, project }: { settings: Settin
 
   return (
     <>
-      <PageHeader eyebrow="06 / RUNTIME SETTINGS" title="Tune the guardrails." description="Meadow runs entirely on this computer. The only outbound traffic is to your coding engine, your local FreeLLMAPI gateway, and Telegram if you connect it." />
+      <PageHeader eyebrow="06 / RUNTIME SETTINGS" title="Tune the guardrails." description="Meadow runs on this computer. The only outbound traffic is to your coding engine, the agent model provider you pick, Telegram if you connect it, and connectors you switch on." />
       <ErrorNote error={update.error ?? updateProject.error ?? exportRun.error} />
       <div className="settings-grid">
 
-      <Section title="Agent model (FreeLLMAPI)" description="All planning, clarifying questions, summaries, embeddings and voice transcription go through your local FreeLLMAPI gateway.">
-        <Row label="Gateway status" hint={llm.data?.detail}>
-          {llm.isFetching ? <Loader2 size={14} className="spin-slow" /> : <span className={`status-tag ${llm.data?.ok ? "passed" : "blocked"}`}>{llm.data?.ok ? <CheckCircle2 size={10} /> : <XCircle size={10} />}{llm.data?.ok ? "Connected" : "Not ready"}</span>}
-          <button className="icon-button" onClick={() => llm.refetch()} aria-label="Recheck gateway"><RefreshCw size={14} /></button>
-        </Row>
-        {llm.data && !llm.data.ok && llm.data.fix ? <div className="fix-hint">{llm.data.fix}</div> : null}
-        <Row label="Base URL" hint="Must be a localhost address."><input className="text-input" defaultValue={config.llm.baseUrl} onBlur={event => event.target.value !== config.llm.baseUrl && patch({ llm: { baseUrl: event.target.value } })} /></Row>
-        <Row label="Model" hint={'"auto" lets FreeLLMAPI pick the best available provider.'}><input className="text-input" defaultValue={config.llm.model} onBlur={event => event.target.value && event.target.value !== config.llm.model && patch({ llm: { model: event.target.value } })} /></Row>
-        <SecretField name="FREELLMAPI_API_KEY" present={secrets.freellmapi} label="Unified API key" placeholder="Paste the key from your FreeLLMAPI dashboard" />
-      </Section>
+      <AgentModelSection patch={patch} />
 
       <Section title="Coding engine" description="The tool that actually edits code. Meadow drives it phase by phase and verifies every result.">
         <Row label="Default engine"><select value={config.engine.default} onChange={event => patch({ engine: { default: event.target.value as typeof config.engine.default } })}>{settings.engines.map(engine => <option key={engine.name} value={engine.name} disabled={engine.status !== "available"}>{engine.label}{engine.status === "coming_soon" ? " — coming soon" : ""}</option>)}</select></Row>
@@ -135,7 +222,7 @@ export function SettingsView({ settings, overview, project }: { settings: Settin
       </Section>
 
       <Section title="CodeAtlas" description="Knowledge graph and investigations. Code, git history, docs and incidents are indexed locally. Issue trackers are contacted only when you switch them on and save a token.">
-        <Row label="LLM rerank" hint="Ask FreeLLMAPI to rerank retrieved evidence. Falls back to fused scores when the gateway is down."><Toggle checked={config.atlas.rerank} onChange={value => patch({ atlas: { rerank: value } })} label="LLM rerank" /></Row>
+        <Row label="LLM rerank" hint="Ask the agent model to rerank retrieved evidence. Falls back to fused scores when it is unavailable."><Toggle checked={config.atlas.rerank} onChange={value => patch({ atlas: { rerank: value } })} label="LLM rerank" /></Row>
         <Row label="Agent tool steps" hint="Maximum tool calls the operator agent may make per question."><NumberInput value={config.atlas.maxAgentSteps} min={1} onCommit={value => patch({ atlas: { maxAgentSteps: Math.min(20, Math.max(1, Math.round(value))) } })} /></Row>
         <Row label="GitHub issues and PRs" hint="Repo defaults to the git origin remote."><Toggle checked={config.atlas.connectors.github.enabled} onChange={value => patch({ atlas: { connectors: { github: { enabled: value } } } })} label="GitHub connector" /></Row>
         {config.atlas.connectors.github.enabled ? (
