@@ -57,7 +57,20 @@ describe.skipIf(process.platform === "win32")("process supervisor", () => {
     const supervisor = new Supervisor();
     const events = await collect(supervisor.start(req("exit"), "sh", ["-c", "echo 'not logged in' >&2; exit 3"], () => []));
     expect(events.find(event => event.type === "error")?.reason).toBe("auth");
-    expect(events.at(-1)).toMatchObject({ type: "done", ok: false });
+    expect(events.at(-1)).toMatchObject({ type: "done", ok: false, reason: "auth" });
+  });
+
+  it("marks the Cursor CLI login error as auth on the done event", async () => {
+    const supervisor = new Supervisor();
+    const message = "Error: Authentication required. Please run 'agent login' first, or set CURSOR_API_KEY environment variable.";
+    const events = await collect(supervisor.start(req("cursor-auth"), "sh", ["-c", `echo "${message}" >&2; exit 1`], () => []));
+    expect(events.at(-1)).toMatchObject({ type: "done", ok: false, reason: "auth" });
+  });
+
+  it("keeps crashed for unrelated failures", async () => {
+    const supervisor = new Supervisor();
+    const events = await collect(supervisor.start(req("crash"), "sh", ["-c", "echo 'segfault' >&2; exit 2"], () => []));
+    expect(events.at(-1)).toMatchObject({ type: "done", ok: false, reason: "crashed" });
   });
 
   it("parses stdout lines into events", async () => {

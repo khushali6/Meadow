@@ -55,6 +55,22 @@ type Active = {
 type PhaseOutcome = "passed" | "blocked" | "paused" | "stopped";
 
 const RESUMABLE: ExecutionStatus[] = ["paused", "waiting", "blocked", "interrupted"];
+const SPECIFIC_FAILURES = new Set(["auth", "missing_binary", "model_unavailable", "rate_limited"]);
+
+export function engineLoginHint(engine: string): string {
+  switch (engine) {
+    case "cursor":
+      return "Run `agent login` in a terminal (or put CURSOR_API_KEY in ~/.meadow/secrets.env)";
+    case "claude_code":
+      return "Run `claude` in a terminal and log in (or put ANTHROPIC_API_KEY in ~/.meadow/secrets.env)";
+    case "codex":
+      return "Run `codex login` in a terminal (or put OPENAI_API_KEY in ~/.meadow/secrets.env)";
+    case "gemini":
+      return "Run `gemini` in a terminal and sign in (or put GEMINI_API_KEY in ~/.meadow/secrets.env)";
+    default:
+      return "Log the engine in (run `meadow doctor` for details)";
+  }
+}
 
 /** One engine run at a time across all projects; other projects queue. */
 class Semaphore {
@@ -325,6 +341,7 @@ export class Harness {
     let tokensOut = 0;
     let cost = 0;
     let sessionId: string | null = null;
+    let specificReason: string | null = null;
     try {
       const engineEnv = minimalEnv({ CURSOR_API_KEY: getSecret("CURSOR_API_KEY"), ANTHROPIC_API_KEY: config.engine.claudeUseFreeLlmApi ? undefined : getSecret("ANTHROPIC_API_KEY") });
       const stream = state.engine.run({
@@ -348,12 +365,14 @@ export class Harness {
           cost += event.usage.costUsd ?? 0;
         }
         if (event.type === "message" && event.detail) report = event.detail;
+        if (event.type === "error" && event.reason && SPECIFIC_FAILURES.has(event.reason)) specificReason = event.reason;
         if (event.type === "done") {
           ok = Boolean(event.ok);
           reason = event.reason ?? (ok ? "completed" : "engine_error");
           if (event.detail) report = event.detail;
         }
       }
+      if (!ok && specificReason && !SPECIFIC_FAILURES.has(reason) && reason !== "cancelled") reason = specificReason;
     } finally {
       release();
       state.engineRunKey = null;
@@ -461,8 +480,13 @@ export class Harness {
           rateLimitHits = 0;
           if (["missing_binary", "auth", "model_unavailable"].includes(result.reason)) {
             const model = engineModel(state.engine.name);
-            const why = result.reason === "auth" ? "is not logged in" : result.reason === "missing_binary" ? "is not installed" : `can't use model ${model ? `"${model}"` : "(its default)"}; choose a model your account or gateway serves in Runtime settings`;
-            return this.block(state, row, phase, phaseNumber, ordered.length, `because ${state.engine.label} ${why} (run \`meadow doctor\`)`, null);
+            const why =
+              result.reason === "auth"
+                ? `is not logged in. ${engineLoginHint(state.engine.name)}, then click Retry`
+                : result.reason === "missing_binary"
+                  ? "is not installed (run `meadow doctor` for the install command)"
+                  : `can't use model ${model ? `"${model}"` : "(its default)"}; choose a model your account or gateway serves in Runtime settings`;
+            return this.block(state, row, phase, phaseNumber, ordered.length, `because ${state.engine.label} ${why}`, null);
           }
           if (result.filesTouched === 0 && attemptsThisRun > 1) noChangeStreak += 1;
           else noChangeStreak = 0;

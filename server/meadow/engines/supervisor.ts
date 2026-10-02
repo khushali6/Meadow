@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { homePath } from "../config";
 import { killTree, spawnGroup } from "../core/exec";
-import { EventQueue, type EngineEvent, type RunRequest } from "./base";
+import { EventQueue, failureReason, type EngineEvent, type RunRequest } from "./base";
 
 export type LineParser = (line: string) => EngineEvent[];
 
@@ -104,8 +104,9 @@ export class Supervisor {
         queue.push({ type: "done", title: "Engine stopped", ok: false, reason: endReason });
       } else if (!sawDone) {
         const ok = code === 0;
-        if (!ok) queue.push({ type: "error", title: `Engine exited with code ${code}`, detail: stderrTail.trim().slice(-1500), reason: /not logged in|log ?in required|please log ?in|logged out|unauthenticated|unauthori[sz]ed|invalid api key|authentication/i.test(stderrTail) ? "auth" : "crashed" });
-        queue.push({ type: "done", title: ok ? "Engine finished" : "Engine failed", ok, reason: ok ? "completed" : "crashed" });
+        const reason = ok ? "completed" : (failureReason(stderrTail) ?? "crashed");
+        if (!ok) queue.push({ type: "error", title: `Engine exited with code ${code}`, detail: stderrTail.trim().slice(-1500), reason });
+        queue.push({ type: "done", title: ok ? "Engine finished" : "Engine failed", ok, reason });
       }
       queue.close();
     });
