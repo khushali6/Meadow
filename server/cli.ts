@@ -101,12 +101,25 @@ async function init() {
   saveConfig({ engine: { models: { [engine]: model || null } } });
 
   if ((await ask("Set up Telegram? (Y/n)", "y")).toLowerCase() !== "n") {
-    if (!getSecret("TELEGRAM_BOT_TOKEN") || (await ask("Replace the stored bot token? (y/N)", "n")).toLowerCase() === "y") {
+    getDb();
+    const { relayUrl, requestLink } = await import("./meadow/channels/relay");
+    const useHosted = relayUrl() && (await ask("Connect to the Meadow bot with one tap? (Y/n — n uses your own bot)", "y")).toLowerCase() !== "n";
+    if (useHosted) {
+      try {
+        const link = await requestLink(createPairingCode("link"));
+        saveConfig({ telegram: { mode: "hosted", ownerId: null } });
+        console.log(`\n  Open this link on your phone and tap Start:\n  ${link.link}\n  It works once, for 15 minutes. Meadow finishes connecting when it's running (\`meadow start\`).\n`);
+      } catch (error) {
+        console.log(`\n  Couldn't reach the Meadow bot: ${(error as Error).message}\n  You can connect later from Runtime settings → Telegram.\n`);
+      }
+    } else if (!getSecret("TELEGRAM_BOT_TOKEN") || (await ask("Replace the stored bot token? (y/N)", "n")).toLowerCase() === "y") {
       const token = await ask("Bot token from @BotFather");
-      if (token) setSecret("TELEGRAM_BOT_TOKEN", token);
+      if (token) {
+        setSecret("TELEGRAM_BOT_TOKEN", token);
+        saveConfig({ telegram: { mode: "own" } });
+      }
     }
-    if (getSecret("TELEGRAM_BOT_TOKEN")) {
-      getDb();
+    if (!useHosted && getSecret("TELEGRAM_BOT_TOKEN")) {
       const code = createPairingCode();
       console.log(`\n  Pairing code: ${code}\n  Start Meadow (\`meadow start\`), then send this code to your bot within 15 minutes.\n  Only that Telegram account will be able to control Meadow. Turn on two-step verification in Telegram.\n`);
     }

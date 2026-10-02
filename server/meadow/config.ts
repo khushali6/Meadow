@@ -42,7 +42,8 @@ export type MeadowConfig = {
   };
   harness: { maxAttempts: number; checkTimeoutS: number; massDeleteThreshold: number; phaseGate: PhaseGate };
   budget: { phaseTokens: number; dailyTokens: number; phaseWallClockS: number };
-  telegram: { ownerId: number | null; notificationLevel: NotificationLevel; quietHours: { enabled: boolean; start: number; end: number }; voiceReplies: boolean };
+  /** `hosted` talks to the Meadow bot through a relay (one-click connect); `own` uses a bot token you created. */
+  telegram: { mode: "hosted" | "own"; relayUrl: string; ownerId: number | null; notificationLevel: NotificationLevel; quietHours: { enabled: boolean; start: number; end: number }; voiceReplies: boolean };
   screenshots: { enabled: boolean };
   approvals: { expiryS: number };
   atlas: {
@@ -78,7 +79,7 @@ export const DEFAULT_CONFIG: MeadowConfig = {
   engine: { default: "cursor", model: null, models: {}, runTimeoutS: 45 * 60, noOutputTimeoutS: 5 * 60, claudeUseFreeLlmApi: false, custom: { label: "Custom command", command: "" } },
   harness: { maxAttempts: 3, checkTimeoutS: 600, massDeleteThreshold: 20, phaseGate: "auto" },
   budget: { phaseTokens: 2_000_000, dailyTokens: 20_000_000, phaseWallClockS: 90 * 60 },
-  telegram: { ownerId: null, notificationLevel: "all", quietHours: { enabled: false, start: 22, end: 8 }, voiceReplies: false },
+  telegram: { mode: "hosted", relayUrl: "", ownerId: null, notificationLevel: "all", quietHours: { enabled: false, start: 22, end: 8 }, voiceReplies: false },
   screenshots: { enabled: true },
   approvals: { expiryS: 30 * 60 },
   atlas: {
@@ -119,6 +120,7 @@ function envOverrides(config: MeadowConfig): MeadowConfig {
   if (env.FREELLMAPI_BASE_URL) next.llm.baseUrl = env.FREELLMAPI_BASE_URL;
   if (env.MEADOW_LLM_MODEL) next.llm.model = env.MEADOW_LLM_MODEL;
   if (env.MEADOW_LLM_PROVIDER) next.llm.provider = env.MEADOW_LLM_PROVIDER as ProviderId;
+  if (env.MEADOW_RELAY_URL) next.telegram.relayUrl = env.MEADOW_RELAY_URL;
   if (env.MEADOW_ENGINE) next.engine.default = env.MEADOW_ENGINE as EngineName;
   return next;
 }
@@ -165,9 +167,9 @@ export function resetConfigCache() {
 /** Secrets come only from the environment or ~/.meadow/secrets.env (0600), never from config.json. */
 /** Agent provider keys (AGENT_*, OPENROUTER_API_KEY, LLM_API_KEY) are separate from the coding-engine keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, CURSOR_API_KEY). */
 export type AgentSecretName = "FREELLMAPI_API_KEY" | "AGENT_OPENAI_API_KEY" | "AGENT_GEMINI_API_KEY" | "AGENT_ANTHROPIC_API_KEY" | "OPENROUTER_API_KEY" | "LLM_API_KEY";
-export type SecretName = AgentSecretName | "TELEGRAM_BOT_TOKEN" | "CURSOR_API_KEY" | "ANTHROPIC_API_KEY" | "OPENAI_API_KEY" | "GEMINI_API_KEY" | "GITHUB_TOKEN" | "JIRA_API_TOKEN" | "LINEAR_API_KEY";
+export type SecretName = AgentSecretName | "TELEGRAM_BOT_TOKEN" | "TELEGRAM_RELAY_TOKEN" | "CURSOR_API_KEY" | "ANTHROPIC_API_KEY" | "OPENAI_API_KEY" | "GEMINI_API_KEY" | "GITHUB_TOKEN" | "JIRA_API_TOKEN" | "LINEAR_API_KEY";
 export const AGENT_SECRET_NAMES: AgentSecretName[] = ["FREELLMAPI_API_KEY", "AGENT_OPENAI_API_KEY", "AGENT_GEMINI_API_KEY", "AGENT_ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "LLM_API_KEY"];
-export const SECRET_NAMES: SecretName[] = [...AGENT_SECRET_NAMES, "TELEGRAM_BOT_TOKEN", "CURSOR_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GITHUB_TOKEN", "JIRA_API_TOKEN", "LINEAR_API_KEY"];
+export const SECRET_NAMES: SecretName[] = [...AGENT_SECRET_NAMES, "TELEGRAM_BOT_TOKEN", "TELEGRAM_RELAY_TOKEN", "CURSOR_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GITHUB_TOKEN", "JIRA_API_TOKEN", "LINEAR_API_KEY"];
 
 function readSecretsFile(): Record<string, string> {
   try {
@@ -194,4 +196,12 @@ export function setSecret(name: SecretName, value: string) {
   const body = Object.entries(secrets).map(([key, val]) => `${key}=${val}`).join("\n") + "\n";
   fs.writeFileSync(homePath("secrets.env"), body, { mode: 0o600 });
   fs.chmodSync(homePath("secrets.env"), 0o600);
+}
+
+export function deleteSecret(name: SecretName) {
+  const secrets = readSecretsFile();
+  if (!(name in secrets)) return;
+  delete secrets[name];
+  const body = Object.entries(secrets).map(([key, val]) => `${key}=${val}`).join("\n") + "\n";
+  fs.writeFileSync(homePath("secrets.env"), body, { mode: 0o600 });
 }

@@ -851,3 +851,5 @@ button.cite-chip:hover { background: var(--sun); }
 .impact-hops li { display: grid; grid-template-columns: 44px minmax(0, auto) 1fr; align-items: center; gap: 8px; }
 .impact-hops .atlas-node-pill { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .impact-hops .impact-via { flex-basis: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pair-code .inline-link { font: 11px ui-monospace, monospace; text-transform: uppercase; color: var(--ink); text-decoration: underline; }
+.pair-code em { color: var(--muted); font-size: 11px; font-style: normal; }

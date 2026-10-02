@@ -1,5 +1,6 @@
 import { CheckCircle2, Download, KeyRound, Loader2, MessageCircle, RefreshCw, Stethoscope, XCircle } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { toast } from "sonner";
 import { ErrorNote, PageHeader, Toggle } from "../components/common";
 import { downloadJson } from "../lib/api";
 import { trpc } from "../lib/trpc";
@@ -146,12 +147,108 @@ function AgentModelSection({ patch }: { patch: (value: Patch) => void }) {
   );
 }
 
+type TelegramStatus = NonNullable<Overview>["telegram"];
+
+function TelegramConnect({ tg, config, hasOwnToken, patch }: { tg: TelegramStatus | undefined; config: Settings["config"]; hasOwnToken: boolean; patch: (value: Patch) => void }) {
+  const utils = trpc.useUtils();
+  const [link, setLink] = useState<{ link: string; bot: string; expiresAt: string } | null>(null);
+  const [advanced, setAdvanced] = useState(config.telegram.mode === "own");
+  const refresh = () => { void utils.overview.invalidate(); void utils.settings.invalidate(); };
+  const connect = trpc.connectTelegram.useMutation({ onSuccess: data => { setLink(data); refresh(); } });
+  const disconnect = trpc.disconnectTelegram.useMutation({ onSuccess: () => { setLink(null); refresh(); } });
+  const pair = trpc.pairTelegram.useMutation();
+  const own = tg?.mode === "own";
+  const waiting = Boolean(link) && !tg?.paired;
+
+  useEffect(() => {
+    if (!waiting) return;
+    const timer = setInterval(() => void utils.overview.invalidate(), 2000);
+    return () => clearInterval(timer);
+  }, [waiting, utils]);
+  useEffect(() => {
+    if (link && tg?.paired) {
+      setLink(null);
+      toast.success(`Telegram connected${tg.bot ? ` to @${tg.bot}` : ""}`);
+    }
+  }, [link, tg?.paired, tg?.bot]);
+
+  const startConnect = () => {
+    const tab = window.open("about:blank", "_blank");
+    connect.mutate(undefined, {
+      onSuccess: data => {
+        if (!tab) return;
+        tab.opener = null;
+        tab.location.href = data.link;
+      },
+      onError: () => tab?.close(),
+    });
+  };
+
+  const state = tg?.paired ? "Connected" : tg?.running ? "Waiting for you in Telegram" : tg?.configured ? "Not running" : "Not connected";
+  return (
+    <>
+      <Row label="Status" hint={tg?.lastError ?? (tg?.bot ? `@${tg.bot}${own ? " (your bot)" : ""}` : undefined)}>
+        <span className={`status-tag ${tg?.paired && tg.running ? "passed" : "queued"}`}><MessageCircle size={10} />{state}</span>
+      </Row>
+      {!own ? (
+        tg?.paired ? (
+          <Row label="Meadow bot" hint="Messages from your account reach only this computer.">
+            <MotionButton className="button secondary" onClick={() => disconnect.mutate()} disabled={disconnect.isPending}>Disconnect</MotionButton>
+          </Row>
+        ) : tg?.hostedAvailable ? (
+          <Row label="Connect" hint="Opens Telegram. Tap Start and you're connected; no bot or token to set up.">
+            <MotionButton className="button" onClick={startConnect} disabled={connect.isPending}>{connect.isPending ? "Opening Telegram…" : link ? "New link" : "Connect Telegram"}</MotionButton>
+          </Row>
+        ) : (
+          <Row label="Meadow bot" hint="This build has no hosted bot configured. Set the relay URL under Advanced, or use your own bot.">
+            <span className="status-tag queued"><span />Unavailable</span>
+          </Row>
+        )
+      ) : (
+        <Row label="Your bot" hint={tg?.paired ? "Paired with your account." : "Send the pairing code to your bot within 15 minutes."}>
+          {tg?.paired ? <MotionButton className="button secondary" onClick={() => disconnect.mutate()} disabled={disconnect.isPending}>Unpair</MotionButton> : <MotionButton className="button secondary" onClick={() => pair.mutate()} disabled={pair.isPending || !hasOwnToken}>New pairing code</MotionButton>}
+        </Row>
+      )}
+      <ErrorNote error={connect.error ?? disconnect.error ?? pair.error} />
+      {waiting && link ? (
+        <div className="pair-code">
+          <span>Telegram should have opened. Tap <strong>Start</strong> in the chat with @{link.bot}. This page updates by itself.</span>
+          <a className="inline-link" href={link.link} target="_blank" rel="noopener noreferrer">Didn't open? Open @{link.bot}</a>
+          <em>Link works once, until {new Date(link.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.</em>
+        </div>
+      ) : null}
+      {own && pair.data ? <div className="pair-code"><span>Send this to {pair.data.bot ? `@${pair.data.bot}` : "your bot"}:</span><code>/pair {pair.data.code}</code></div> : null}
+      <Row label="Advanced" hint="Run your own bot, or point to a self-hosted relay.">
+        <Toggle checked={advanced} onChange={setAdvanced} label="Show advanced" />
+      </Row>
+      {advanced ? (
+        <>
+          <Row label="Bot" hint={own ? "Using your own bot token." : "Using the Meadow bot."}>
+            <select value={own ? "own" : "hosted"} onChange={event => patch({ telegram: { mode: event.target.value as "own" | "hosted" } })}>
+              <option value="hosted">Meadow bot (one click)</option>
+              <option value="own">My own bot (token from @BotFather)</option>
+            </select>
+          </Row>
+          {own ? <SecretField name="TELEGRAM_BOT_TOKEN" present={hasOwnToken} label="Bot token" placeholder="123456:ABC… from @BotFather" /> : null}
+          {!own ? (
+            <Row label="Relay URL" hint="Leave empty to use the built-in Meadow bot. Must be HTTPS (or http://localhost).">
+              <input className="text-input" placeholder="https://relay.example.com" defaultValue={config.telegram.relayUrl} onBlur={event => {
+                const value = event.target.value.trim();
+                if (value !== config.telegram.relayUrl) patch({ telegram: { relayUrl: value } });
+              }} />
+            </Row>
+          ) : null}
+        </>
+      ) : null}
+    </>
+  );
+}
+
 export function SettingsView({ settings, overview, project }: { settings: Settings | undefined; overview: Overview | undefined; project: ProjectSummary | undefined }) {
   const utils = trpc.useUtils();
   const update = trpc.updateSettings.useMutation({ onSuccess: data => utils.settings.setData(undefined, data) });
   const updateProject = trpc.updateProject.useMutation({ onSuccess: () => { utils.overview.invalidate(); utils.project.invalidate(); } });
   const doctor = trpc.doctor.useQuery(undefined, { enabled: false });
-  const pair = trpc.pairTelegram.useMutation();
   const exportRun = trpc.exportRun.useMutation({ onSuccess: data => downloadJson(`${data.project.name}-run-export.json`, data) });
   if (!settings) return <div className="event-empty">Loading settings…</div>;
   const { config, secrets } = settings;
@@ -201,17 +298,8 @@ export function SettingsView({ settings, overview, project }: { settings: Settin
         <Row label="Wall clock per phase"><NumberInput value={config.budget.phaseWallClockS} min={60} suffix="s" onCommit={value => patch({ budget: { phaseWallClockS: value } })} /></Row>
       </Section>
 
-      <Section title="Telegram" description="Send requests by text or voice and get phase updates with screenshots. Only the paired owner gets answers; everyone else gets silence.">
-        <Row label="Bot" hint={tg?.lastError ?? (tg?.bot ? `@${tg.bot}` : undefined)}>
-          <span className={`status-tag ${tg?.running ? "passed" : "queued"}`}><MessageCircle size={10} />{tg?.running ? (tg.paired ? "Paired" : "Waiting to pair") : tg?.configured ? "Not running" : "Not set up"}</span>
-        </Row>
-        <SecretField name="TELEGRAM_BOT_TOKEN" present={secrets.telegram} label="Bot token" placeholder="123456:ABC… from @BotFather" />
-        {secrets.telegram ? (
-          <Row label="Pair your account" hint="Send the code to your bot within 15 minutes.">
-            <MotionButton className="button secondary" onClick={() => pair.mutate()} disabled={pair.isPending}>New pairing code</MotionButton>
-          </Row>
-        ) : null}
-        {pair.data ? <div className="pair-code"><span>Send this to {pair.data.bot ? `@${pair.data.bot}` : "your bot"}:</span><code>/pair {pair.data.code}</code></div> : null}
+      <Section title="Telegram" description="Send requests by text or voice and get phase updates with screenshots. Only your paired account gets answers; everyone else gets silence.">
+        <TelegramConnect tg={tg} config={config} hasOwnToken={secrets.telegram} patch={patch} />
         <Row label="Notifications"><select value={config.telegram.notificationLevel} onChange={event => patch({ telegram: { notificationLevel: event.target.value as "all" | "phases" | "failures" } })}><option value="all">Everything, with a live progress card</option><option value="phases">Phase starts and results</option><option value="failures">Only problems</option></select></Row>
         <Row label="Quiet hours" hint="Non-urgent updates are held until the window ends.">
           <Toggle checked={config.telegram.quietHours.enabled} onChange={value => patch({ telegram: { quietHours: { ...config.telegram.quietHours, enabled: value } } })} label="Quiet hours" />

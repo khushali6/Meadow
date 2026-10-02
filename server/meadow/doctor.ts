@@ -39,7 +39,12 @@ export async function systemChecks(): Promise<SystemCheck[]> {
   checks.push({ name: "Voice transcription", ok: routing.voice.available || Boolean(whisper), optional: true, detail: routing.voice.available ? `Via ${routing.voice.name}${whisper ? " (whisper.cpp fallback ready)" : ""}` : whisper ? "On this machine via whisper.cpp" : routing.voice.reason, fix: "Pick a provider with transcription, or install whisper.cpp + ffmpeg and set MEADOW_WHISPER_MODEL." });
   const pw = await playwrightStatus();
   checks.push({ name: "Screenshots (Playwright)", ok: pw.ok, optional: true, detail: pw.detail });
-  checks.push({ name: "Telegram", ok: Boolean(getSecret("TELEGRAM_BOT_TOKEN")), optional: true, detail: getSecret("TELEGRAM_BOT_TOKEN") ? (loadConfig().telegram.ownerId ? "Bot token set, owner paired" : "Bot token set, not paired yet") : "No bot token", fix: "Create a bot with @BotFather, then run `meadow init`." });
+  {
+    const hosted = loadConfig().telegram.mode === "hosted" && Boolean(getSecret("TELEGRAM_RELAY_TOKEN"));
+    const own = Boolean(getSecret("TELEGRAM_BOT_TOKEN"));
+    const paired = loadConfig().telegram.ownerId !== null;
+    checks.push({ name: "Telegram", ok: (hosted || own) && paired, optional: true, detail: hosted ? (paired ? "Connected to the Meadow bot" : "Link requested, not connected yet") : own ? (paired ? "Own bot, owner paired" : "Own bot token set, not paired yet") : "Not connected", fix: "Runtime settings → Telegram → Connect Telegram (or `meadow init`)." });
+  }
   const ffmpeg = await which("ffmpeg");
   const piper = await which("piper");
   checks.push({ name: "Spoken replies (Piper + ffmpeg)", ok: Boolean(ffmpeg && piper && process.env.MEADOW_PIPER_MODEL), optional: true, detail: `ffmpeg ${ffmpeg ? "found" : "missing"}, piper ${piper ? "found" : "missing"}${process.env.MEADOW_PIPER_MODEL ? "" : ", MEADOW_PIPER_MODEL unset"}` });

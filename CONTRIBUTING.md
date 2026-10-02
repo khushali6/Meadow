@@ -20,6 +20,7 @@ MEADOW_HOME=/tmp/meadow-dev MEADOW_PROJECTS_DIR=/tmp/meadow-dev/projects MEADOW_
 - `server/cli.ts` — the `meadow` command.
 - `server/_core/` — HTTP daemon (Express, tRPC, SSE, static dashboard).
 - `server/routers.ts` — the dashboard API.
+- `server/relay/` — the Telegram relay for the shared Meadow bot (`dist/relay.js`).
 - `server/meadow/` — everything else:
   - `harness/` — phase loop, verifier, guards, prompts, summaries
   - `engines/` — Cursor, Codex, Gemini, custom and fake adapters (Claude Code coming soon), process supervisor

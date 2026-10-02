@@ -5,6 +5,7 @@ import { mcpConfigSnippet } from "./meadow/atlas/mcpServer";
 import { atlasStatus, createDemo, evaluate, nodeDetail, pathBetween, startIngest, startInvestigation, systemMap, toolCatalogue } from "./meadow/atlas/service";
 import { listActions, runTool } from "./meadow/atlas/tools";
 import { publicProcedure, router } from "./_core/trpc";
+import { checkRelayUrl } from "./meadow/channels/relay";
 import { telegram, createPairingCode } from "./meadow/channels/telegram";
 import { getSecret, loadConfig, saveConfig, setSecret } from "./meadow/config";
 import { decide, listApprovals } from "./meadow/core/approvals";
@@ -38,7 +39,7 @@ const configPatch = z.object({
   engine: z.object({ default: z.enum(["cursor", "claude_code", "codex", "gemini", "custom", "fake"]), model: z.string().nullable(), models: z.record(z.string(), z.string().max(120).nullable()), runTimeoutS: z.number().min(60).max(6 * 3600), noOutputTimeoutS: z.number().min(30).max(3600), claudeUseFreeLlmApi: z.boolean() }).partial().optional(),
   harness: z.object({ maxAttempts: z.number().int().min(1).max(10), checkTimeoutS: z.number().min(10).max(7200), massDeleteThreshold: z.number().int().min(1), phaseGate: z.enum(["auto", "ask"]) }).partial().optional(),
   budget: z.object({ phaseTokens: z.number().int().min(1000), dailyTokens: z.number().int().min(1000), phaseWallClockS: z.number().int().min(60) }).partial().optional(),
-  telegram: z.object({ notificationLevel: z.enum(["all", "phases", "failures"]), quietHours: z.object({ enabled: z.boolean(), start: z.number().int().min(0).max(23), end: z.number().int().min(0).max(23) }), voiceReplies: z.boolean() }).partial().optional(),
+  telegram: z.object({ mode: z.enum(["hosted", "own"]), relayUrl: z.string().max(300), notificationLevel: z.enum(["all", "phases", "failures"]), quietHours: z.object({ enabled: z.boolean(), start: z.number().int().min(0).max(23), end: z.number().int().min(0).max(23) }), voiceReplies: z.boolean() }).partial().optional(),
   screenshots: z.object({ enabled: z.boolean() }).partial().optional(),
   llm: z.object({
     provider: providerId,
@@ -206,18 +207,30 @@ export const appRouter = router({
   updateSettings: publicProcedure.input(configPatch).mutation(({ input }) => {
     if (input.engine?.default) assertSelectableEngine(input.engine.default);
     validateLlmPatch(input);
+    if (input.telegram?.relayUrl) input.telegram.relayUrl = checkRelayUrl(input.telegram.relayUrl);
+    const telegramChanged = input.telegram?.mode !== undefined || input.telegram?.relayUrl !== undefined;
     saveConfig(input);
+    if (telegramChanged) {
+      telegram.stop();
+      void telegram.start();
+    }
     return safeSettings();
   }),
   setSecret: publicProcedure.input(z.object({ name: z.enum(["FREELLMAPI_API_KEY", "AGENT_OPENAI_API_KEY", "AGENT_GEMINI_API_KEY", "AGENT_ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "LLM_API_KEY", "TELEGRAM_BOT_TOKEN", "GITHUB_TOKEN", "JIRA_API_TOKEN", "LINEAR_API_KEY"]), value: z.string().min(8).max(500) })).mutation(async ({ input }) => {
     setSecret(input.name, input.value.trim());
     if (input.name === "TELEGRAM_BOT_TOKEN") {
+      saveConfig({ telegram: { mode: "own" } });
       telegram.stop();
       await telegram.start();
     }
     return safeSettings();
   }),
   pairTelegram: publicProcedure.mutation(() => ({ code: createPairingCode(), bot: telegram.status().bot })),
+  connectTelegram: publicProcedure.mutation(() => telegram.connectHosted()),
+  disconnectTelegram: publicProcedure.mutation(async () => {
+    await telegram.disconnect();
+    return telegram.status();
+  }),
   exportRun: publicProcedure.input(z.object({ projectId: z.number() })).mutation(({ input }) => exportBundle(input.projectId)),
   doctor: publicProcedure.query(() => fullDoctor()),
   llmStatus: publicProcedure.query(() => llmStatus()),

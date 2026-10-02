@@ -78,9 +78,41 @@ MEADOW_ENGINE=fake meadow run examples/DEMO-PLAN.md
 
 In Telegram (and in the dashboard's Request page) you can also use `/new`, `/projects`, `/project`, `/plan`, `/status`, `/phase`, `/pause`, `/resume`, `/stop`, `/retry`, `/skip`, `/rollback`, `/logs`, `/engine`, `/next`, `/ask`, `/remember`, `/index`, `/notify`, `/budget`, `/shot`, `/investigate` (also `/why`) and `/help`.
 
+## Connect Telegram
+
+Open **Runtime settings → Telegram** and click **Connect Telegram**. Telegram opens on the Meadow bot; tap **Start** and you're connected. There's no bot to create and no token to copy. `meadow init` offers the same thing as a link you can open on your phone.
+
+Under the hood the link carries a one-time, random code that is valid for 15 minutes. The first account that taps Start with it becomes the only one that can control your Meadow. **Disconnect** forgets the link on both sides.
+
+If you prefer, **Advanced → My own bot** still works the old way: paste a token from @BotFather and send the pairing code to your bot. In that mode Meadow talks to Telegram directly.
+
+### How the shared bot works (and hosting it)
+
+One bot can serve many people only if something routes each chat to the right computer, so the Meadow bot sits behind a small **relay** (`server/relay/`, built to `dist/relay.js`):
+
+- The relay holds the bot token and is the only thing that talks to Telegram as the bot. Your Meadow never sees the bot token; it gets its own device token, stored in `~/.meadow/secrets.env` as `TELEGRAM_RELAY_TOKEN`.
+- A chat is attached to a device only through the one-time Start link that device requested. A device can read updates only from its own chat and can send messages, screenshots and voice notes only to its own chat. It can download only files sent in its own chat, and it can't call anything outside a short list of Bot API methods.
+- Messages pass through the relay's memory on the way to your computer. The relay writes only device bindings (a hash of each device token, plus the chat and user ID) to disk.
+- Strangers who message the bot get a short "connect from Meadow" reply and never reach anyone's computer.
+
+To run the bot for your users:
+
+1. Create the bot once with @BotFather (name, picture, description).
+2. Deploy the relay anywhere that can serve HTTPS:
+
+   ```bash
+   pnpm build
+   TELEGRAM_BOT_TOKEN=123456:ABC... PORT=8787 RELAY_DATA=./relay-data/devices.json node dist/relay.js
+   # or: docker build -f deploy/relay.Dockerfile -t meadow-relay . && docker run -e TELEGRAM_BOT_TOKEN=... -p 8787:8787 -v meadow-relay:/data meadow-relay
+   ```
+
+3. Put its public HTTPS URL in `HOSTED_RELAY_URL` in `server/meadow/channels/relay.ts` and rebuild, so every install connects to it out of the box. Users can also point to a different relay with `MEADOW_RELAY_URL` or Settings → Telegram → Advanced → Relay URL.
+
+The relay must be served over HTTPS; Meadow refuses plain HTTP except on localhost. Run a single instance, because Telegram delivers each bot's updates to one consumer.
+
 ## Progress on Telegram
 
-Pair a bot (`meadow init` or Settings → Telegram) and Meadow reports every run as it happens:
+Once connected, Meadow reports every run as it happens:
 
 - **Run started**, with Pause and Stop buttons.
 - **A live progress card per phase**, edited in place (no notification spam): current stage (preparing, engine working, running checks, fixing), attempt number, engine, elapsed time, each check with ✓/✗, and the latest engine activity (files edited, commands run, messages). It refreshes every 30 seconds during long engine steps.
@@ -240,6 +272,7 @@ Settings live in `~/.meadow/config.json` and are editable from the dashboard's S
 | `MEADOW_PORT` | Dashboard port (default `7777`) |
 | `MEADOW_ENGINE` | Default engine: `cursor`, `codex`, `gemini`, `custom` or `fake` (`claude_code` is coming soon) |
 | `MEADOW_CURSOR_BIN` / `MEADOW_CLAUDE_BIN` / `MEADOW_CODEX_BIN` / `MEADOW_GEMINI_BIN` | Engine binary paths if not on `PATH` |
+| `MEADOW_RELAY_URL` | Telegram relay for the shared Meadow bot (defaults to the built-in one) |
 | `MEADOW_PIPER_MODEL` | Piper voice model for spoken replies |
 | `GITHUB_TOKEN` / `JIRA_API_TOKEN` / `LINEAR_API_KEY` | CodeAtlas connectors, used only when enabled in Settings → CodeAtlas |
 | `MEADOW_ATLAS_NO_LLM=1` | Force CodeAtlas to its rule-based planner and writer |
@@ -253,7 +286,7 @@ Prompt templates can be overridden by placing files in `<project>/.meadow/templa
 ## Security
 
 - The dashboard listens on `127.0.0.1` only, rejects requests whose `Host` header isn't a loopback name (DNS-rebinding guard), and requires a per-start session token on every API call. There is no CORS.
-- Outbound traffic goes only to the coding engine, the agent model provider you chose, Telegram (if configured), and connectors you enable. Memory (index, notes, graph, embeddings) stays local; cloud providers never compute embeddings.
+- Outbound traffic goes only to the coding engine, the agent model provider you chose, Telegram (directly with your own bot, or through the Meadow bot relay), and connectors you enable. Memory (index, notes, graph, embeddings) stays local; cloud providers never compute embeddings.
 - Secrets, tokens and chat contents are never placed in prompts; logs and events are redacted.
 - Engines run with a minimal environment allowlist and are killed as a whole process group on timeout, silence, or stop. Claude Code runs with `--strict-mcp-config`, so your global MCP servers (browsers, remote tools) are not available inside project runs.
 - Guards revert edits to `PLAN.md`, `SPEC.md` and `.meadow/`, revert symlinks that escape the project, block commits that add secrets or credential files, and pause for approval before mass deletions. Approvals that aren't answered in time are denied.

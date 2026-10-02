@@ -17,7 +17,15 @@ Meadow does not defend against malware already running as your user, a compromis
 
 ### Network
 
-- Outbound traffic: the coding engine (its own provider), the agent model provider you chose, the Telegram Bot API if configured, and CodeAtlas connectors you enable. Nothing else.
+- Outbound traffic: the coding engine (its own provider), the agent model provider you chose, Telegram if connected (the Bot API directly with your own bot, or the Meadow bot relay over HTTPS), and CodeAtlas connectors you enable. Nothing else.
+
+### Telegram relay (shared Meadow bot)
+
+- The bot token exists only in the relay. Each Meadow install authenticates with its own random device token; the relay stores only its SHA-256 hash.
+- A chat is bound to a device only by a one-time, 144-bit random code in a `t.me` deep link the device requested, valid for 15 minutes. Codes can't be guessed or reused, and a new binding for a chat replaces the old one.
+- A device can only receive updates from its bound chat. It can only send to that chat (JSON and multipart are both checked), answer its own callbacks, and download files that arrived in its chat. Every other Bot API method is refused.
+- Message contents are held in memory only while they wait for delivery (at most 500 per device) and are never written to disk. Whoever operates the relay can technically see messages in transit; users who don't want that can run their own relay or use their own bot.
+- `/v1/link` is rate limited per IP. The relay URL must be HTTPS (plain HTTP only on localhost), with no credentials in it.
 - Local providers (FreeLLMAPI, Ollama, LM Studio) must use a loopback address. Cloud providers (OpenAI, Anthropic, Gemini, OpenRouter) always use their official HTTPS endpoint, which can't be overridden. Custom OpenAI-compatible endpoints must be loopback unless allowed per provider, and then must use HTTPS. `MEADOW_ALLOW_REMOTE_LLM=1` lifts the loopback rule for local and custom providers.
 - Memory (context index, notes, knowledge graph, embeddings) stays in the local database. Embeddings are computed locally or by a local provider, never by a cloud provider. Only prompt text and the snippets selected for it go to a cloud chat provider.
 - Agent keys (`AGENT_*`, `FREELLMAPI_API_KEY`, `OPENROUTER_API_KEY`, `LLM_API_KEY`) and engine keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `CURSOR_API_KEY`) are kept apart: engines never receive agent keys and the agent never uses engine keys.
