@@ -8,6 +8,7 @@ import { publicProcedure, router } from "./_core/trpc";
 import { telegram, createPairingCode } from "./meadow/channels/telegram";
 import { getSecret, loadConfig, saveConfig, setSecret } from "./meadow/config";
 import { decide, listApprovals } from "./meadow/core/approvals";
+import { auditLog, RISK_POLICY } from "./meadow/core/audit";
 import { fullDoctor, llmStatus } from "./meadow/doctor";
 import { PROVIDERS } from "./meadow/llm/catalog";
 import { healthCheck, llmRouting, providerFor, providerSummaries } from "./meadow/llm/router";
@@ -173,6 +174,7 @@ export const appRouter = router({
     bus.emitEvent({ projectId: input.projectId, type: "plan_ready", title: `Plan v${result.version} drafted with ${result.added.length} new phase${result.added.length === 1 ? "" : "s"}`, detail: result.added.join(", ") });
     return result;
   }),
+  audit: publicProcedure.input(z.object({ projectId: z.number().nullable(), limit: z.number().int().min(1).max(500).default(100) })).query(({ input }) => ({ rows: auditLog(input.projectId, input.limit), policy: RISK_POLICY })),
   memoryStatus: publicProcedure.input(z.object({ projectId: z.number() })).query(({ input }) => memoryStatus(input.projectId)),
   reembed: publicProcedure.input(z.object({ projectId: z.number() })).mutation(async ({ input }) => {
     const chunks = await reembed(input.projectId);

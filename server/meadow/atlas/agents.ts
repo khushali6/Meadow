@@ -121,7 +121,7 @@ async function plan(question: string, cls: Classification, usage: LlmUsage): Pro
   const fallback = { subquestions: decompose(question, cls), tools: heuristicTools(question, cls), planner: "rules" as const };
   if (!llmAvailable()) return fallback;
   const external = await listExternalTools().catch(() => []);
-  const catalogue = [...TOOLS.filter(tool => tool.risk === "read" && tool.name !== "investigate").map(tool => `${tool.name}: ${tool.description} args ${Object.keys(tool.shape).join(", ") || "none"}`), ...external.map(tool => `${tool.qualified}: ${tool.description}`)].join("\n");
+  const catalogue = [...TOOLS.filter(tool => tool.risk === "READ" && tool.name !== "investigate").map(tool => `${tool.name}: ${tool.description} args ${Object.keys(tool.shape).join(", ") || "none"}`), ...external.filter(tool => tool.readOnly).map(tool => `${tool.qualified}: ${tool.description}`)].join("\n");
   const result = await tryJson(
     [
       { role: "system", content: "You plan an engineering investigation over a code knowledge graph. Reply with JSON {\"subquestions\": [up to 4 short search queries], \"tools\": [{\"name\": tool, \"args\": {...}}]} using at most 4 read-only tools from the catalogue. Never include secrets." },
@@ -460,7 +460,7 @@ async function runInvestigation(id: number, projectId: number, question: string,
     for (const call of planned.tools.slice(0, loadConfig().atlas.maxAgentSteps)) {
       try {
         if (call.name.includes("__")) {
-          const output = await callExternalTool(call.name, call.args);
+          const output = await callExternalTool(call.name, call.args, { projectId, agent: "operator" });
           evidence.add({ ref: `tool:${call.name}:${JSON.stringify(call.args)}`, title: `${call.name} (external MCP)`, kind: "tool", path: null, snippet: output.slice(0, 1500), context: "external tool", ts: null, facts: [], sources: ["operator"], score: 0.02 });
           trace.step("operator", call.name, output.slice(0, 300), { args: call.args, external: true });
           continue;

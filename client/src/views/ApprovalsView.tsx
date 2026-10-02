@@ -21,6 +21,7 @@ export function ApprovalsView({ approvals, projects }: { approvals: Approval[]; 
   const pending = approvals.filter(item => item.status === "pending");
   const decided = approvals.filter(item => item.status !== "pending").slice(0, 30);
   const projectName = (id: number | null) => projects.find(project => project.id === id)?.name ?? "Meadow";
+  const audit = trpc.audit.useQuery({ projectId: null, limit: 100 }, { refetchInterval: 10_000 });
   return (
     <>
       <PageHeader eyebrow="04 / POLICY GATES" title="Every risky action has a boundary." description="Mass deletions and similar actions pause the run until you decide. Anything you don't answer in time is denied, never approved." />
@@ -55,6 +56,29 @@ export function ApprovalsView({ approvals, projects }: { approvals: Approval[]; 
           ))}
         </section>
       ) : null}
+      <section className="panel history-panel">
+        <div className="panel-heading"><div><span className="panel-kicker">Audit log</span><h2>Every tool call, by argument fingerprint</h2></div></div>
+        {audit.data ? (
+          <div className="audit-policy">
+            {Object.entries(audit.data.policy).map(([risk, policy]) => <span key={risk}><span className={`atlas-risk ${risk}`}>{risk}</span> {policy.approval === "none" ? "runs without approval" : `needs ${policy.approval}-risk approval`}{policy.allowFromMcp ? "" : ", never over MCP"}</span>)}
+          </div>
+        ) : null}
+        {audit.data?.rows.length ? (
+          <div className="audit-wrap">
+            <table className="audit-table">
+              <thead><tr><th>When</th><th>Project</th><th>Agent</th><th>Tool</th><th>Risk</th><th>Args hash</th><th>Approval</th><th>Result</th><th>ms</th></tr></thead>
+              <tbody>
+                {audit.data.rows.map(row => (
+                  <tr key={row.id} title={row.detail}>
+                    <td>{relativeTime(row.ts)}</td><td>{projectName(row.project_id)}</td><td>{row.agent}</td><td>{row.tool}</td>
+                    <td><span className={`atlas-risk ${row.risk}`}>{row.risk}</span></td><td>{row.args_hash}</td><td>{row.approval}</td><td className={`result-${row.result}`}>{row.result}</td><td>{row.duration_ms}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : <div className="event-empty">No tool calls recorded yet. Arguments are never stored, only a fingerprint.</div>}
+      </section>
     </>
   );
 }

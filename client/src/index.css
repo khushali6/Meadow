@@ -812,3 +812,11 @@ button.cite-chip:hover { background: var(--sun); }
 .suggestion strong { font-size: 12px; }
 .suggestion span { color: var(--muted); font-size: 11px; }
 .status-brief pre { margin: 8px 0 0; max-height: 360px; overflow: auto; padding: 12px; background: #1d211e; color: #dfe7dc; font: 10px/1.6 ui-monospace, monospace; white-space: pre-wrap; }
+.atlas-risk.READ { color: var(--moss); }.atlas-risk.LOW_WRITE { color: #8d6722; }.atlas-risk.HIGH_WRITE { color: var(--error); }.atlas-risk.DESTRUCTIVE { color: var(--paper); background: var(--error); border-color: var(--error); }
+.audit-table { width: 100%; border-collapse: collapse; font: 10px ui-monospace, monospace; }
+.audit-table th { text-align: left; color: var(--muted); font-weight: 600; text-transform: uppercase; padding: 6px 8px; border-bottom: 1px solid var(--ink); }
+.audit-table td { padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.audit-table td.result-error, .audit-table td.result-refused { color: var(--error); }
+.audit-table td.result-ok { color: #3f6b41; }
+.audit-wrap { overflow-x: auto; }
+.audit-policy { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 0 16px 12px; font-size: 11px; color: var(--muted); }

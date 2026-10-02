@@ -58,9 +58,9 @@ export async function startMcpServer(options: { project?: string } = {}) {
   for (const tool of TOOLS) {
     server.registerTool(tool.name, {
       title: tool.title,
-      description: `${tool.description}${tool.risk === "read" ? "" : " Requires owner approval in Meadow."}`,
+      description: `${tool.description}${tool.risk === "READ" ? "" : ` Risk: ${tool.risk}. Requires owner approval in Meadow.`}`,
       inputSchema: { project: z.string().optional().describe("Meadow project name; defaults to the project containing the working directory"), ...tool.shape },
-      annotations: { readOnlyHint: tool.risk === "read", destructiveHint: tool.risk !== "read", openWorldHint: false },
+      annotations: { readOnlyHint: tool.risk === "READ", destructiveHint: tool.risk === "DESTRUCTIVE" || tool.risk === "HIGH_WRITE", openWorldHint: false },
     }, async (args: Record<string, unknown>) => {
       try {
         const { project, ...rest } = args;

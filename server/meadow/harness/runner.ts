@@ -18,6 +18,12 @@ import { compileFixPrompt, compilePhasePrompt, rulesFileContent } from "./prompt
 import { summarizePhase } from "./summarize";
 import { verify, type CheckOutcome } from "./verifier";
 
+/** Backoff between engine rate-limit retries, in seconds. MEADOW_RATE_LIMIT_WAITS overrides it (comma-separated). */
+function rateLimitWaits(): number[] {
+  const custom = process.env.MEADOW_RATE_LIMIT_WAITS?.split(",").map(Number).filter(value => Number.isFinite(value) && value >= 0);
+  return custom?.length ? custom : [30, 60, 120, 300];
+}
+
 export type ExecutionStatus = "running" | "paused" | "waiting" | "blocked" | "stopped" | "completed" | "interrupted" | "failed";
 export type ExecutionRow = { id: number; project_id: number; plan_id: number; status: ExecutionStatus; engine: string; current_phase_id: number | null; tokens: number; cost_usd: number; note: string | null; started_at: string; finished_at: string | null };
 
@@ -186,6 +192,16 @@ export class Harness {
     this.emit(state, "execution_finished", status === "completed" ? "All phases passed" : `Run ${status}`, note ?? "", { payload: { status } });
   }
 
+  /** Sleeps in short steps so pause and stop take effect during a rate-limit wait. Returns false when interrupted. */
+  private async waitInterruptibly(state: Active, ms: number): Promise<boolean> {
+    const until = Date.now() + ms;
+    while (Date.now() < until) {
+      if (state.stopRequested || state.pauseRequested) return false;
+      await new Promise(resolve => setTimeout(resolve, Math.min(250, until - Date.now())));
+    }
+    return true;
+  }
+
   private setPhase(phase: PhaseRow, patch: Partial<Pick<PhaseRow, "status" | "branch" | "attempts" | "summary" | "commit_sha" | "started_at" | "finished_at">>) {
     getDb().update("phases", phase.id, patch as Record<string, string | number | null>);
     Object.assign(phase, patch);
@@ -349,6 +365,7 @@ export class Harness {
     let lastFailure: CheckOutcome | null = null;
     let lastSignature: string | null = null;
     let noChangeStreak = 0;
+    let rateLimitHits = 0;
     let guardFeedback = "";
     let engineReport = "";
     let preview: PreviewHandle | null = null;
@@ -381,6 +398,7 @@ export class Harness {
           const prompt = lastFailure
             ? compileFixPrompt({ plan, phase, projectPath: project.path, failing: { check: lastFailure.check, exitCode: lastFailure.exitCode, output: lastFailure.output }, hint: state.hint ?? undefined, guardFeedback, brief, attempt: { n: attemptsThisRun, max: config.harness.maxAttempts } })
             : compilePhasePrompt({ plan, phase, projectPath: project.path, projectRules: projectRules(project), previousSummaries, context, brief, guardFeedback: [guardFeedback, state.hint ? `Hint from the user: ${state.hint}` : ""].filter(Boolean).join("\n") });
+          const hintUsed = state.hint;
           state.hint = null;
           const result = await this.runEngine(state, project, row, prompt, lastFailure ? "fix" : "initial");
           engineReport = result.report || engineReport;
@@ -388,6 +406,21 @@ export class Harness {
             this.setPhase(row, { status: "stopped" });
             return "stopped";
           }
+          if (result.reason === "rate_limited") {
+            attemptsThisRun -= 1;
+            this.setPhase(row, { attempts: Math.max(0, row.attempts - 1) });
+            state.hint = hintUsed;
+            const waits = rateLimitWaits();
+            if (rateLimitHits >= waits.length) {
+              this.park(state, row, "paused", `${state.engine.label} is still rate limited after ${waits.length} waits. Resume when your quota resets; no attempts were used.`);
+              return "paused";
+            }
+            const waitS = waits[rateLimitHits++];
+            this.emit(state, "guard", `${state.engine.label} is rate limited; waiting ${waitS}s`, "This does not count as an attempt. Meadow retries automatically, and pausing or stopping still works while it waits.", { phaseId: row.id, payload: { rateLimited: true, waitS } });
+            await this.waitInterruptibly(state, waitS * 1000);
+            continue;
+          }
+          rateLimitHits = 0;
           if (["missing_binary", "auth", "model_unavailable"].includes(result.reason)) {
             const model = engineModel(state.engine.name);
             const why = result.reason === "auth" ? "is not logged in" : result.reason === "missing_binary" ? "is not installed" : `can't use model ${model ? `"${model}"` : "(its default)"}; choose a model your account or gateway serves in Runtime settings`;
