@@ -9,6 +9,7 @@ import { telegram } from "../meadow/channels/telegram";
 import { homePath, loadConfig, meadowHome } from "../meadow/config";
 import { closeExternalClients } from "../meadow/atlas/mcpClient";
 import { startActionExecutor } from "../meadow/atlas/tools";
+import { migrateUnavailableEngines } from "../meadow/projects";
 import { expireOrphanedApprovals, sweepExpiredApprovals } from "../meadow/core/approvals";
 import { getDb } from "../meadow/core/db";
 import { bus, eventsAfter, startForeignEventRelay } from "../meadow/core/events";
@@ -38,6 +39,7 @@ export async function startDaemon(options: { port?: number; dev?: boolean } = {}
   const config = loadConfig();
   const port = options.port ?? config.server.port;
   getDb();
+  const migrated = migrateUnavailableEngines();
   const interrupted = harness.recoverOnStartup();
   expireOrphanedApprovals();
   getDb().run("UPDATE atlas_actions SET status = CASE status WHEN 'running' THEN 'interrupted' ELSE 'expired' END, finished_at = ? WHERE status IN ('pending', 'running')", new Date().toISOString());
@@ -116,7 +118,7 @@ export async function startDaemon(options: { port?: number; dev?: boolean } = {}
   notifier.start();
 
   const url = `http://${config.server.host}:${port}/?token=${token}`;
-  console.log(`\n  Meadow is running locally.\n  Dashboard: ${url}\n  Data: ${meadowHome()}\n${interrupted ? `  ${interrupted} interrupted run(s) can be resumed from the dashboard or Telegram.\n` : ""}`);
+  console.log(`\n  Meadow is running locally.\n  Dashboard: ${url}\n  Data: ${meadowHome()}\n${interrupted ? `  ${interrupted} interrupted run(s) can be resumed from the dashboard or Telegram.\n` : ""}${migrated.map(item => `  ${item.project}: ${item.from} is not available yet, switched to ${item.to}.\n`).join("")}`);
 
   let closing = false;
   const shutdown = async () => {

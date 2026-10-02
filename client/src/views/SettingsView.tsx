@@ -82,8 +82,8 @@ export function SettingsView({ settings, overview, project }: { settings: Settin
       </Section>
 
       <Section title="Coding engine" description="The tool that actually edits code. Meadow drives it phase by phase and verifies every result.">
-        <Row label="Default engine"><select value={config.engine.default} onChange={event => patch({ engine: { default: event.target.value as typeof config.engine.default } })}>{settings.engines.map(engine => <option key={engine.name} value={engine.name}>{engine.label}</option>)}</select></Row>
-        {project ? <Row label={`Engine for ${project.name}`}><select value={project.engine} onChange={event => updateProject.mutate({ id: project.id, engine: event.target.value })}>{settings.engines.map(engine => <option key={engine.name} value={engine.name}>{engine.label}</option>)}</select></Row> : null}
+        <Row label="Default engine"><select value={config.engine.default} onChange={event => patch({ engine: { default: event.target.value as typeof config.engine.default } })}>{settings.engines.map(engine => <option key={engine.name} value={engine.name} disabled={engine.status !== "available"}>{engine.label}{engine.status === "coming_soon" ? " — coming soon" : ""}</option>)}</select></Row>
+        {project ? <Row label={`Engine for ${project.name}`}><select value={project.engine} onChange={event => updateProject.mutate({ id: project.id, engine: event.target.value })}>{settings.engines.map(engine => <option key={engine.name} value={engine.name} disabled={engine.status !== "available"}>{engine.label}{engine.status === "coming_soon" ? " — coming soon" : ""}</option>)}</select></Row> : null}
         <Row label={`Model for ${engineLabel(activeEngine)}`} hint="Leave empty for the engine's own default. With a local gateway, use a model it serves.">
           <input key={activeEngine} className="text-input" placeholder="engine default" defaultValue={config.engine.models?.[activeEngine as keyof typeof config.engine.models] ?? ""} onBlur={event => {
             const value = event.target.value.trim() || null;
@@ -95,7 +95,7 @@ export function SettingsView({ settings, overview, project }: { settings: Settin
             <code className="inline-code">{config.engine.custom.command || "not set"}</code>
           </Row>
         ) : null}
-        <Row label="Route Claude Code through FreeLLMAPI" hint="Claude Code uses your gateway instead of an Anthropic key."><Toggle checked={config.engine.claudeUseFreeLlmApi} onChange={value => patch({ engine: { claudeUseFreeLlmApi: value } })} label="Route Claude Code through FreeLLMAPI" /></Row>
+        {settings.engines.filter(engine => engine.status === "coming_soon").map(engine => <Row key={engine.name} label={engine.label} hint="The adapter is built but not enabled yet."><span className="status-tag queued"><span />Coming soon</span></Row>)}
         <Row label="Engine run timeout"><NumberInput value={config.engine.runTimeoutS} min={60} suffix="s" onCommit={value => patch({ engine: { runTimeoutS: value } })} /></Row>
         <Row label="Kill if silent for"><NumberInput value={config.engine.noOutputTimeoutS} min={30} suffix="s" onCommit={value => patch({ engine: { noOutputTimeoutS: value } })} /></Row>
       </Section>

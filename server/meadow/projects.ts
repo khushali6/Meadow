@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { loadConfig } from "./config";
 import { getDb, now } from "./core/db";
+import { assertSelectableEngine, effectiveDefaultEngine, engineLabel, engineStatus } from "./engines/registry";
 import { bus } from "./core/events";
 import { commitAll, currentBranch, ensureRepo, isClean } from "./core/git";
 import { confine, slugify, validProjectName } from "./core/paths";
@@ -37,6 +38,8 @@ export async function createProject(input: { name: string; engine?: string; desc
   const name = slugify(input.name);
   if (!validProjectName(name)) throw new Error("Project names use lowercase letters, numbers and dashes.");
   if (findProject(name)) throw new Error(`A project called ${name} already exists.`);
+  const engine = input.engine ?? effectiveDefaultEngine();
+  assertSelectableEngine(engine);
   const projectPath = input.path ? path.resolve(input.path) : confine(config.projectsDir, name);
   fs.mkdirSync(projectPath, { recursive: true });
   await ensureRepo(projectPath);
@@ -47,7 +50,7 @@ export async function createProject(input: { name: string; engine?: string; desc
   const id = getDb().insert("projects", {
     name,
     path: projectPath,
-    engine: input.engine ?? config.engine.default,
+    engine,
     description: input.description ?? "",
     screenshots: 1,
     base_branch: baseBranch,
@@ -59,8 +62,22 @@ export async function createProject(input: { name: string; engine?: string; desc
 }
 
 export function updateProject(id: number, patch: Partial<Pick<ProjectRow, "engine" | "description" | "screenshots">>) {
+  if (patch.engine) assertSelectableEngine(patch.engine);
   getDb().update("projects", id, { ...patch, updated_at: now() });
   return getProject(id);
+}
+
+/** Moves projects off engines that can no longer be selected. The adapter and its settings are left untouched. */
+export function migrateUnavailableEngines(): Array<{ project: string; from: string; to: string }> {
+  const fallback = effectiveDefaultEngine();
+  const moved: Array<{ project: string; from: string; to: string }> = [];
+  for (const project of getDb().all<ProjectRow>("SELECT * FROM projects")) {
+    if (engineStatus(project.engine) === "available") continue;
+    getDb().update("projects", project.id, { engine: fallback, updated_at: now() });
+    bus.emitEvent({ type: "guard", projectId: project.id, title: `Engine switched to ${engineLabel(fallback)}`, detail: `${engineLabel(project.engine)} is ${engineStatus(project.engine) === "coming_soon" ? "coming soon" : "not available"}, so this project now uses ${engineLabel(fallback)}. Your ${engineLabel(project.engine)} settings are kept.` });
+    moved.push({ project: project.name, from: project.engine, to: fallback });
+  }
+  return moved;
 }
 
 export function projectRules(project: ProjectRow): string {

@@ -6,7 +6,7 @@ import { minimalEnv } from "../core/exec";
 import * as git from "../core/git";
 import { tail } from "../core/redact";
 import type { Engine, EngineEvent } from "../engines/base";
-import { getEngine } from "../engines/registry";
+import { assertSelectableEngine, getEngine } from "../engines/registry";
 import { executionOrder, type Plan, type PlanPhase } from "../planning/format";
 import { getProject, parsedActivePlan, phasesFor, projectRules, touchProject, type PhaseRow, type ProjectRow } from "../projects";
 import { indexMemory, indexProject, promptContext } from "../rag/index";
@@ -92,6 +92,7 @@ export class Harness {
     const active = parsedActivePlan(projectId);
     if (!active) throw new Error("This project has no approved plan yet. Create or import a plan and approve it first.");
     const engineName = options.engine ?? project.engine;
+    assertSelectableEngine(engineName);
     const engine = getEngine(engineName);
     const previous = this.latestExecution(projectId);
     let executionId: number;

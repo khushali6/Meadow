@@ -6,6 +6,7 @@ import { getSecret, loadConfig, meadowHome, saveConfig, setSecret, type EngineNa
 import { getDb } from "./meadow/core/db";
 import { bus, type MeadowEvent } from "./meadow/core/events";
 import { fullDoctor, llmStatus } from "./meadow/doctor";
+import { effectiveDefaultEngine, selectableEngines } from "./meadow/engines/registry";
 import { harness } from "./meadow/harness/runner";
 import { formatErrors, parsePlan } from "./meadow/planning/format";
 import { approvePlan, createProject, findProject, getProject, savePlanVersion } from "./meadow/projects";
@@ -71,7 +72,12 @@ async function init() {
   const llm = await llmStatus();
   console.log(`  ${mark(llm.ok)} ${llm.detail}`);
 
-  const engine = (await ask("Default engine (cursor | claude_code | codex | gemini | custom | fake)", config.engine.default)) as EngineName;
+  const available = selectableEngines();
+  let engine = (await ask(`Default engine (${available.join(" | ")})`, effectiveDefaultEngine())) as EngineName;
+  if (!available.includes(engine)) {
+    console.log(`  ${engine === "claude_code" ? "Claude Code is coming soon." : `Unknown engine ${engine}.`} Using ${effectiveDefaultEngine()}.`);
+    engine = effectiveDefaultEngine() as EngineName;
+  }
   saveConfig({ engine: { default: engine } });
   if (engine === "custom") {
     const command = await ask('Command to run (gets $MEADOW_PROMPT / $MEADOW_PROMPT_FILE), e.g. aider --yes-always --message-file "$MEADOW_PROMPT_FILE"', config.engine.custom.command);
@@ -80,10 +86,6 @@ async function init() {
   }
   const model = await ask(`Model for ${engine} (blank = engine default)`, config.engine.models?.[engine] ?? "");
   saveConfig({ engine: { models: { [engine]: model || null } } });
-  if (engine === "claude_code") {
-    const viaGateway = (await ask("Route Claude Code through FreeLLMAPI (free models)? (y/N)", "n")).toLowerCase() === "y";
-    saveConfig({ engine: { claudeUseFreeLlmApi: viaGateway } });
-  }
 
   if ((await ask("Set up Telegram? (Y/n)", "y")).toLowerCase() !== "n") {
     if (!getSecret("TELEGRAM_BOT_TOKEN") || (await ask("Replace the stored bot token? (y/N)", "n")).toLowerCase() === "y") {

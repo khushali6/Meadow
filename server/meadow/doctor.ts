@@ -1,7 +1,7 @@
 import { getSecret, loadConfig } from "./config";
 import { capture, which } from "./core/exec";
 import type { DoctorReport } from "./engines/base";
-import { doctorAll } from "./engines/registry";
+import { doctorAll, effectiveDefaultEngine } from "./engines/registry";
 import { getLlm } from "./llm/client";
 import { playwrightStatus } from "./visual/capture";
 
@@ -36,5 +36,5 @@ export async function systemChecks(): Promise<SystemCheck[]> {
 
 export async function fullDoctor(): Promise<{ system: SystemCheck[]; engines: DoctorReport[]; defaultEngine: string }> {
   const [system, engines] = await Promise.all([systemChecks(), doctorAll()]);
-  return { system, engines, defaultEngine: loadConfig().engine.default };
+  return { system, engines, defaultEngine: effectiveDefaultEngine() };
 }

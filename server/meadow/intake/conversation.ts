@@ -4,7 +4,7 @@ import { decide } from "../core/approvals";
 import { getDb, now } from "../core/db";
 import { slugify } from "../core/paths";
 import { redact } from "../core/redact";
-import { engineNames } from "../engines/registry";
+import { engineInfo, selectableEngines } from "../engines/registry";
 import { harness } from "../harness/runner";
 import { formatErrors, parsePlan } from "../planning/format";
 import { addNote, approvePlan, createProject, findProject, getPlan, getProject, latestPlan, listProjects, savePlanVersion, updateProject } from "../projects";
@@ -348,7 +348,9 @@ async function command(state: ConversationState, text: string): Promise<Reply> {
     }
     case "/engine": {
       const projectId = requireProject(state);
-      if (!engineNames().includes(arg)) return { text: `Engines: ${engineNames().join(", ")}` };
+      const info = engineInfo().find(engine => engine.name === arg);
+      if (info?.status === "coming_soon") return { text: `${info.label} is coming soon. Available: ${selectableEngines().join(", ")}` };
+      if (!info || info.status !== "available") return { text: `Engines: ${selectableEngines().join(", ")}${engineInfo().filter(engine => engine.status === "coming_soon").map(engine => `\nComing soon: ${engine.name}`).join("")}` };
       updateProject(projectId, { engine: arg });
       return { text: `Engine for this project is now ${arg}.` };
     }

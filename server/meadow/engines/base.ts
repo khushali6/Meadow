@@ -41,6 +41,7 @@ export type DoctorReport = {
   version: string | null;
   checks: DoctorCheck[];
   flags: Record<string, boolean>;
+  status?: "available" | "coming_soon" | "disabled";
 };
 
 export interface Engine {

@@ -9,7 +9,7 @@ import { telegram, createPairingCode } from "./meadow/channels/telegram";
 import { getSecret, loadConfig, saveConfig, setSecret } from "./meadow/config";
 import { decide, listApprovals } from "./meadow/core/approvals";
 import { fullDoctor, llmStatus } from "./meadow/doctor";
-import { engineLabel, engineNames } from "./meadow/engines/registry";
+import { assertSelectableEngine, engineInfo } from "./meadow/engines/registry";
 import { harness } from "./meadow/harness/runner";
 import { handleAction, handleText } from "./meadow/intake/conversation";
 import { improvePlan } from "./meadow/intake/llm";
@@ -63,7 +63,7 @@ function safeSettings() {
   return {
     config,
     secrets: { freellmapi: Boolean(getSecret("FREELLMAPI_API_KEY")), telegram: Boolean(getSecret("TELEGRAM_BOT_TOKEN")), github: Boolean(getSecret("GITHUB_TOKEN")), jira: Boolean(getSecret("JIRA_API_TOKEN")), linear: Boolean(getSecret("LINEAR_API_KEY")) },
-    engines: engineNames().map(name => ({ name, label: engineLabel(name) })),
+    engines: engineInfo(),
   };
 }
 
@@ -80,7 +80,6 @@ export const appRouter = router({
 
   createProject: publicProcedure.input(z.object({ name: z.string().min(2).max(48), engine: z.string(), description: z.string().max(500).optional() })).mutation(({ input }) => createProject(input)),
   updateProject: publicProcedure.input(z.object({ id: z.number(), engine: z.string().optional(), screenshots: z.boolean().optional(), description: z.string().optional() })).mutation(({ input }) => {
-    if (input.engine && !engineNames().includes(input.engine)) throw new Error(`Unknown engine ${input.engine}`);
     return updateProject(input.id, { engine: input.engine, description: input.description, screenshots: input.screenshots === undefined ? undefined : input.screenshots ? 1 : 0 });
   }),
 
@@ -139,6 +138,7 @@ export const appRouter = router({
 
   settings: publicProcedure.query(() => safeSettings()),
   updateSettings: publicProcedure.input(configPatch).mutation(({ input }) => {
+    if (input.engine?.default) assertSelectableEngine(input.engine.default);
     saveConfig(input);
     return safeSettings();
   }),

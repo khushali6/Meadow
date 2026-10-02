@@ -44,7 +44,7 @@ function NewProjectDialog({ settings, onClose, onCreated }: { settings: Settings
         <div className="dialog-head"><div><span className="eyebrow">New local project</span><h2 id="new-project-title">Give the work a home.</h2></div><button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={16} /></button></div>
         <label><span>Name</span><input autoFocus value={name} onChange={event => setName(event.target.value)} placeholder="habit-tracker" /><small>Folder: {settings?.config.projectsDir}/{slug || "…"}</small></label>
         <label><span>Description (optional)</span><textarea rows={3} value={description} onChange={event => setDescription(event.target.value)} /></label>
-        <label><span>Engine</span><select value={engine} onChange={event => setEngine(event.target.value as typeof engine)}>{settings?.engines.map(item => <option key={item.name} value={item.name}>{item.label}</option>)}</select></label>
+        <label><span>Engine</span><select value={engine} onChange={event => setEngine(event.target.value as typeof engine)}>{settings?.engines.map(item => <option key={item.name} value={item.name} disabled={item.status !== "available"}>{item.label}{item.status === "coming_soon" ? " — coming soon" : ""}</option>)}</select></label>
         <ErrorNote error={create.error} />
         <div className="dialog-foot"><span><ShieldCheck size={14} /> Stays on this machine</span><div><MotionButton type="button" className="button secondary" onClick={onClose}>Cancel</MotionButton><MotionButton className="button primary" disabled={slug.length < 2 || create.isPending}>{create.isPending ? "Creating…" : "Create project"}</MotionButton></div></div>
       </form>
