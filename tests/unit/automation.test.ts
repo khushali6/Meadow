@@ -116,8 +116,8 @@ describe("database migrations", () => {
     first.raw.prepare("INSERT INTO notes (body) VALUES (?)").run("hello");
     first.close();
     const second = new Db(file, BASE);
-    expect(second.lastBackup).toMatch(/backups\/meadow-v1-.*\.db$/);
-    expect(fs.statSync(second.lastBackup!).mode & 0o777).toBe(0o600);
+    expect(second.lastBackup).toMatch(/backups[\\/]meadow-v1-.*\.db$/);
+    if (process.platform !== "win32") expect(fs.statSync(second.lastBackup!).mode & 0o777).toBe(0o600);
     expect(second.schemaVersion()).toBe(2);
     second.close();
     const dir = path.join(env.root, "db", "backups");
@@ -139,6 +139,15 @@ describe("database migrations", () => {
     expect(reopened.raw.prepare("SELECT body FROM notes").get()).toEqual({ body: "keep me" });
     expect(reopened.raw.prepare("SELECT name FROM pragma_table_info('notes') WHERE name = 'tag'").get()).toBeUndefined();
     reopened.close();
+  });
+
+  it("refuses a database written by a newer version instead of writing to it", () => {
+    const file = path.join(env.root, "db3", "meadow.db");
+    new Db(file, BASE).close();
+    expect(() => new Db(file, BASE.slice(0, 1))).toThrow(/newer Meadow \(schema v2; this version knows up to v1\)/);
+    const again = new Db(file, BASE);
+    expect(again.schemaVersion()).toBe(2);
+    again.close();
   });
 });
 

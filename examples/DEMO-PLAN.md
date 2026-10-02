@@ -9,7 +9,7 @@ phases:
       - Create hello.txt
     checks:
       - file_exists: hello.txt
-      - cmd: test -s hello.txt
+      - cmd: node -e "process.exit(require('fs').statSync('hello.txt').size>0?0:1)"
     done_when: hello.txt exists and is not empty
   - id: world
     name: Say world
@@ -18,7 +18,7 @@ phases:
       - Create world.txt
     checks:
       - file_exists: world.txt
-      - cmd: test -f hello.txt && test -f world.txt
+      - cmd: node -e "['hello.txt','world.txt'].forEach(f=>require('fs').accessSync(f))"
     done_when: Both files exist
 ---
 

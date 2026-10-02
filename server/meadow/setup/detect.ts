@@ -18,6 +18,8 @@ export type ProjectProfile = {
   envExampleKeys: string[];
   commands: DetectedCommand[];
   markers: string[];
+  /** Sub-folders with their own manifest (monorepo services, apps, packages). */
+  packages: string[];
 };
 
 const read = (root: string, file: string): string | null => {
@@ -47,11 +49,36 @@ const JS_DBS: Array<[string, string]> = [["pg", "PostgreSQL"], ["postgres", "Pos
 const PY_FRAMEWORKS: Array<[RegExp, string]> = [[/\bdjango\b/i, "Django"], [/\bfastapi\b/i, "FastAPI"], [/\bflask\b/i, "Flask"], [/\bstreamlit\b/i, "Streamlit"]];
 const PY_DBS: Array<[RegExp, string]> = [[/psycopg/i, "PostgreSQL"], [/sqlalchemy/i, "SQLAlchemy"], [/pymongo/i, "MongoDB"], [/\bredis\b/i, "Redis"], [/mysqlclient|pymysql/i, "MySQL"]];
 
-/** Reads well-known marker files (never `.env`, only `.env.example` key names) and infers how the project is built and verified. */
-export function detectProject(root: string): ProjectProfile {
-  const profile: ProjectProfile = { root, languages: [], frameworks: [], packageManager: null, testFrameworks: [], buildSystem: null, git: { repo: false, remote: null, branch: null }, ci: [], databases: [], docker: { dockerfile: false, compose: false }, mcpConfigs: [], envExampleKeys: [], commands: [], markers: [] };
-  const mark = (file: string) => exists(root, file) && (profile.markers.push(file), true);
+const MANIFESTS = ["package.json", "pyproject.toml", "requirements.txt", "setup.py", "go.mod", "Cargo.toml", "pom.xml", "build.gradle", "build.gradle.kts", "Gemfile", "composer.json"];
+const SKIP_DIRS = new Set(["node_modules", "vendor", "dist", "build", "target", "out", "coverage", "venv", ".venv", "__pycache__", "tmp", "fixtures", "examples", "docs"]);
 
+/** First- and second-level folders that hold a manifest, e.g. services/payments or apps/web. Bounded so huge trees stay fast. */
+function packageDirs(root: string): string[] {
+  const found: string[] = [];
+  const children = (dir: string) => {
+    try {
+      return fs.readdirSync(path.join(root, dir), { withFileTypes: true }).filter(entry => entry.isDirectory() && !entry.name.startsWith(".") && !SKIP_DIRS.has(entry.name)).map(entry => path.join(dir, entry.name)).slice(0, 100);
+    } catch {
+      return [];
+    }
+  };
+  const hasManifest = (dir: string) => MANIFESTS.some(file => exists(root, path.join(dir, file)));
+  for (const first of children("")) {
+    if (hasManifest(first)) found.push(first);
+    else for (const second of children(first)) if (hasManifest(second)) found.push(second);
+    if (found.length >= 60) break;
+  }
+  return found;
+}
+
+/**
+ * Adds languages, frameworks, test runners and databases found in one folder. Verify commands come only from the
+ * root, because they run from the project root; `prefix` is the folder relative to it ("" for the root).
+ */
+function scanManifests(root: string, prefix: string, profile: ProjectProfile): boolean {
+  const commands: DetectedCommand[] = [];
+  const before = profile.markers.length;
+  const mark = (file: string) => exists(root, file) && (profile.markers.push(prefix ? path.join(prefix, file).split(path.sep).join("/") : file), true);
   const pkg = json<{ scripts?: Record<string, string>; dependencies?: Record<string, string>; devDependencies?: Record<string, string>; packageManager?: string }>(read(root, "package.json"));
   if (pkg) {
     mark("package.json");
@@ -60,18 +87,18 @@ export function detectProject(root: string): ProjectProfile {
     for (const [dep, name] of JS_FRAMEWORKS) if (deps[dep]) add(profile.frameworks, name);
     for (const [dep, name] of JS_TESTS) if (deps[dep]) add(profile.testFrameworks, name);
     for (const [dep, name] of JS_DBS) if (deps[dep]) add(profile.databases, name);
-    profile.packageManager = pkg.packageManager?.split("@")[0] ?? (exists(root, "pnpm-lock.yaml") ? "pnpm" : exists(root, "yarn.lock") ? "yarn" : exists(root, "bun.lockb") || exists(root, "bun.lock") ? "bun" : "npm");
+    if (!prefix || !profile.packageManager) profile.packageManager = pkg.packageManager?.split("@")[0] ?? (exists(root, "pnpm-lock.yaml") ? "pnpm" : exists(root, "yarn.lock") ? "yarn" : exists(root, "bun.lockb") || exists(root, "bun.lock") ? "bun" : "npm");
     const run = (script: string) => (profile.packageManager === "npm" ? `npm run ${script}` : `${profile.packageManager} ${script}`);
     const scripts = pkg.scripts ?? {};
     const pick = (kind: VerifyKind, names: string[]) => {
       const name = names.find(candidate => scripts[candidate] && !/watch|--watch|serve|dev\b/.test(scripts[candidate]));
-      if (name) profile.commands.push({ kind, cmd: kind === "test" && profile.testFrameworks.includes("Vitest") && !/run\b/.test(scripts[name]) && /^vitest\s*$/.test(scripts[name].trim()) ? `${run(name)} -- --run` : run(name), source: `package.json scripts.${name}` });
+      if (name) commands.push({ kind, cmd: kind === "test" && profile.testFrameworks.includes("Vitest") && !/run\b/.test(scripts[name]) && /^vitest\s*$/.test(scripts[name].trim()) ? `${run(name)} -- --run` : run(name), source: `package.json scripts.${name}` });
       return Boolean(name);
     };
-    if (!pick("typecheck", ["typecheck", "type-check", "check-types", "tsc", "check"]) && deps.typescript && exists(root, "tsconfig.json")) profile.commands.push({ kind: "typecheck", cmd: "npx tsc --noEmit", source: "tsconfig.json" });
+    if (!pick("typecheck", ["typecheck", "type-check", "check-types", "tsc", "check"]) && deps.typescript && exists(root, "tsconfig.json")) commands.push({ kind: "typecheck", cmd: "npx tsc --noEmit", source: "tsconfig.json" });
     pick("lint", ["lint"]);
     if (scripts.test && !/no test specified/.test(scripts.test)) pick("test", ["test"]);
-    if (pick("build", ["build"])) profile.buildSystem = profile.frameworks.includes("Vite") ? "Vite" : profile.frameworks.includes("Next.js") ? "Next.js" : "package.json build script";
+    if (pick("build", ["build"]) && (!prefix || !profile.buildSystem)) profile.buildSystem = profile.frameworks.includes("Vite") ? "Vite" : profile.frameworks.includes("Next.js") ? "Next.js" : "package.json build script";
   }
   const pyproject = read(root, "pyproject.toml");
   const requirements = read(root, "requirements.txt");
@@ -85,24 +112,55 @@ export function detectProject(root: string): ProjectProfile {
     profile.packageManager ??= exists(root, "uv.lock") ? "uv" : exists(root, "poetry.lock") ? "poetry" : "pip";
     if (/pytest/i.test(text) || exists(root, "pytest.ini") || exists(root, "tests")) {
       add(profile.testFrameworks, "pytest");
-      profile.commands.push({ kind: "test", cmd: profile.packageManager === "uv" ? "uv run pytest -q" : profile.packageManager === "poetry" ? "poetry run pytest -q" : "python -m pytest -q", source: "pytest" });
+      commands.push({ kind: "test", cmd: profile.packageManager === "uv" ? "uv run pytest -q" : profile.packageManager === "poetry" ? "poetry run pytest -q" : "python -m pytest -q", source: "pytest" });
     }
-    if (/\bmypy\b/i.test(text)) profile.commands.push({ kind: "typecheck", cmd: "mypy .", source: "mypy" });
-    if (/\bruff\b/i.test(text)) profile.commands.push({ kind: "lint", cmd: "ruff check .", source: "ruff" });
+    if (/\bmypy\b/i.test(text)) commands.push({ kind: "typecheck", cmd: "mypy .", source: "mypy" });
+    if (/\bruff\b/i.test(text)) commands.push({ kind: "lint", cmd: "ruff check .", source: "ruff" });
   }
   if (mark("go.mod")) {
     add(profile.languages, "Go");
     profile.buildSystem ??= "go build";
-    profile.commands.push({ kind: "build", cmd: "go build ./...", source: "go.mod" }, { kind: "test", cmd: "go test ./...", source: "go.mod" }, { kind: "lint", cmd: "go vet ./...", source: "go.mod" });
+    commands.push({ kind: "build", cmd: "go build ./...", source: "go.mod" }, { kind: "test", cmd: "go test ./...", source: "go.mod" }, { kind: "lint", cmd: "go vet ./...", source: "go.mod" });
     add(profile.testFrameworks, "go test");
   }
   if (mark("Cargo.toml")) {
     add(profile.languages, "Rust");
     profile.packageManager ??= "cargo";
     profile.buildSystem ??= "cargo";
-    profile.commands.push({ kind: "build", cmd: "cargo build", source: "Cargo.toml" }, { kind: "test", cmd: "cargo test", source: "Cargo.toml" }, { kind: "lint", cmd: "cargo clippy -- -D warnings", source: "Cargo.toml" });
+    commands.push({ kind: "build", cmd: "cargo build", source: "Cargo.toml" }, { kind: "test", cmd: "cargo test", source: "Cargo.toml" }, { kind: "lint", cmd: "cargo clippy -- -D warnings", source: "Cargo.toml" });
     add(profile.testFrameworks, "cargo test");
   }
+
+  if (mark("pom.xml") || mark("build.gradle") || mark("build.gradle.kts")) {
+    add(profile.languages, exists(root, "build.gradle.kts") || fs.existsSync(path.join(root, "src/main/kotlin")) ? "Kotlin" : "Java");
+    profile.buildSystem ??= exists(root, "pom.xml") ? "Maven" : "Gradle";
+    const wrapper = exists(root, "pom.xml") ? (exists(root, "mvnw") ? (process.platform === "win32" ? "mvnw.cmd" : "./mvnw") : "mvn") : exists(root, "gradlew") ? (process.platform === "win32" ? "gradlew.bat" : "./gradlew") : "gradle";
+    commands.push({ kind: "test", cmd: `${wrapper} ${exists(root, "pom.xml") ? "-q test" : "test"}`, source: exists(root, "pom.xml") ? "pom.xml" : "build.gradle" });
+  }
+  if (mark("Gemfile")) add(profile.languages, "Ruby");
+  if (mark("composer.json")) add(profile.languages, "PHP");
+  if (!prefix) profile.commands.push(...commands);
+  return profile.markers.length > before;
+}
+
+/** `.git` is a folder in a normal clone and a `gitdir: …` file in worktrees and submodules. */
+function gitDirOf(root: string): string | null {
+  const dotGit = path.join(root, ".git");
+  try {
+    if (fs.statSync(dotGit).isDirectory()) return dotGit;
+    const target = fs.readFileSync(dotGit, "utf8").match(/^gitdir:\s*(.+)$/m)?.[1]?.trim();
+    return target ? path.resolve(root, target) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Reads well-known marker files (never `.env`, only `.env.example` key names) and infers how the project is built and verified. */
+export function detectProject(root: string): ProjectProfile {
+  const profile: ProjectProfile = { root, languages: [], frameworks: [], packageManager: null, testFrameworks: [], buildSystem: null, git: { repo: false, remote: null, branch: null }, ci: [], databases: [], docker: { dockerfile: false, compose: false }, mcpConfigs: [], envExampleKeys: [], commands: [], markers: [], packages: [] };
+  scanManifests(root, "", profile);
+  for (const dir of packageDirs(root)) if (scanManifests(path.join(root, dir), dir, profile)) profile.packages.push(dir.split(path.sep).join("/"));
+  const mark = (file: string) => exists(root, file) && (profile.markers.push(file), true);
 
   profile.docker = { dockerfile: mark("Dockerfile"), compose: mark("docker-compose.yml") || mark("docker-compose.yaml") || mark("compose.yaml") || mark("compose.yml") };
   const compose = read(root, "docker-compose.yml") ?? read(root, "docker-compose.yaml") ?? read(root, "compose.yaml") ?? "";
@@ -111,9 +169,10 @@ export function detectProject(root: string): ProjectProfile {
 
   if (exists(root, ".git")) {
     profile.git.repo = true;
-    const head = read(root, ".git/HEAD");
+    const gitDir = gitDirOf(root);
+    const head = gitDir ? read(gitDir, "HEAD") : null;
     profile.git.branch = head?.match(/ref: refs\/heads\/(.+)/)?.[1]?.trim() ?? null;
-    const remote = read(root, ".git/config")?.match(/\[remote "origin"\][^[]*?url\s*=\s*(\S+)/)?.[1] ?? null;
+    const remote = (gitDir ? (read(gitDir, "config") ?? read(path.join(gitDir, "..", ".."), "config")) : null)?.match(/\[remote "origin"\][^[]*?url\s*=\s*(\S+)/)?.[1] ?? null;
     profile.git.remote = remote ? remote.replace(/\/\/[^@/]+@/, "//") : null;
   }
   if (exists(root, ".github/workflows")) {

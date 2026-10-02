@@ -24,7 +24,12 @@ export const DEFAULT_GITIGNORE = ["node_modules/", ".env", ".env.*", "*.pem", "*
 export async function ensureRepo(cwd: string, baseBranch = "main") {
   fs.mkdirSync(cwd, { recursive: true });
   if (!fs.existsSync(path.join(cwd, ".git"))) {
-    await git(cwd, "init", "-q", "-b", baseBranch);
+    const init = await capture("git", ["init", "-q", "-b", baseBranch], { cwd, env: GIT_ENV });
+    if (init.code !== 0) {
+      // git before 2.28 has no -b.
+      await git(cwd, "init", "-q");
+      await git(cwd, "symbolic-ref", "HEAD", `refs/heads/${baseBranch}`);
+    }
   }
   const gitignore = path.join(cwd, ".gitignore");
   if (!fs.existsSync(gitignore)) fs.writeFileSync(gitignore, DEFAULT_GITIGNORE);

@@ -1,8 +1,9 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { generateAcmePay } from "../../server/meadow/atlas/demo";
+import { portableCheck } from "../../server/meadow/core/checks";
 import { getDb } from "../../server/meadow/core/db";
 import { getSetting } from "../../server/meadow/core/settings";
 import { parsePlan } from "../../server/meadow/planning/format";
@@ -81,7 +82,7 @@ describe("onboarding", () => {
     const phases = parsePlan(latestPlan(projectId)!.raw_md).plan!.phases;
     const run = (cmd: string) => {
       try {
-        execFileSync("sh", ["-c", cmd], { cwd: dir, stdio: "ignore" });
+        execSync(cmd, { cwd: dir, stdio: "ignore" });
         return true;
       } catch {
         return false;
@@ -102,6 +103,27 @@ describe("onboarding", () => {
     expect(run(debtCheck.cmd)).toBe(true);
     fs.rmSync(path.join(dir, "debt.ts"));
     expect(run(debtCheck.cmd)).toBe(true);
+  });
+
+  it("writes checks that survive awkward paths and refuse shell-sensitive scripts", () => {
+    const awkward = path.join(dir, "odd dir $HOME %PATH% `x` 'q' é");
+    fs.mkdirSync(awkward, { recursive: true });
+    const run = (cmd: string) => {
+      try {
+        execSync(cmd, { cwd: dir, stdio: "ignore" });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const relative = path.relative(dir, awkward);
+    expect(run(portableCheck.hasTests(relative).cmd)).toBe(false);
+    fs.writeFileSync(path.join(awkward, "a.spec.js"), "");
+    expect(run(portableCheck.hasTests(relative).cmd)).toBe(true);
+    fs.writeFileSync(path.join(awkward, "ARCH.md"), "line\n".repeat(25));
+    expect(run(portableCheck.minLines(path.join(relative, "ARCH.md"), 20).cmd)).toBe(true);
+    expect(run(portableCheck.minLines(path.join(relative, "ARCH.md"), 40).cmd)).toBe(false);
+    expect(() => portableCheck.node("process.exit($X)")).toThrow();
   });
 
   it("puts a failing baseline first and gates later phases with passing checks", () => {

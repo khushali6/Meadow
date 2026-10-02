@@ -159,7 +159,7 @@ export function parsePlan(markdown: string): ParseResult {
             checks.push({ kind: "cmd", cmd: c.cmd.trim(), expectRegex: c.expect_regex === undefined ? undefined : String(c.expect_regex), timeoutS: c.timeout === undefined ? undefined : Number(c.timeout) });
           } else if (typeof c.file_exists === "string" && c.file_exists.trim()) {
             const file = c.file_exists.trim();
-            if (file.startsWith("/") || file.split(/[\\/]/).includes("..")) err(checkNode, `${cf}.file_exists`, "file_exists must be a relative path inside the project.");
+            if (file.startsWith("/") || file.startsWith("\\") || /^[a-zA-Z]:/.test(file) || file.split(/[\\/]/).includes("..")) err(checkNode, `${cf}.file_exists`, "file_exists must be a relative path inside the project.");
             checks.push({ kind: "file_exists", path: file });
           } else if (typeof c.http === "string" && c.http.trim()) {
             const target = c.http.trim();

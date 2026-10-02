@@ -5,6 +5,7 @@ import { getSecret, loadConfig } from "../config";
 import { requestApproval } from "../core/approvals";
 import { audit, isSafeRelativePath, RISK_POLICY, type RiskLevel } from "../core/audit";
 import { getDb, now } from "../core/db";
+import { portableCheck } from "../core/checks";
 import { bus } from "../core/events";
 import { minimalEnv, runShell } from "../core/exec";
 import { git } from "../core/git";
@@ -163,7 +164,7 @@ function gated(ctx: ToolContext, tool: keyof typeof EXECUTORS, title: string, de
 
 export function fixPlanMarkdown(input: { projectName: string; title: string; description: string; files: string[]; checks: string[] }): string {
   const yaml = (value: string) => JSON.stringify(value);
-  const checks = input.checks.length ? input.checks : input.files.length ? [`git diff --name-only HEAD -- ${input.files.map(file => `'${file.replace(/'/g, "")}'`).join(" ")} | grep -q .`] : ["git diff --quiet HEAD && exit 1 || exit 0"];
+  const checks = input.checks.length ? input.checks : [portableCheck.changed(input.files).cmd];
   return `---
 project: ${input.projectName}
 goal: ${yaml(input.title)}

@@ -2,12 +2,13 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const repo = path.resolve(__dirname, "../..");
-const tsx = path.join(repo, "node_modules", ".bin", "tsx");
+const cli = ["--import", pathToFileURL(path.join(repo, "node_modules", "tsx", "dist", "loader.mjs")).href, path.join(repo, "server", "cli.ts")];
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "meadow-mcp-"));
 const env = { ...process.env, MEADOW_HOME: path.join(root, "home"), MEADOW_PROJECTS_DIR: path.join(root, "projects"), MEADOW_NO_JSONL: "1", FREELLMAPI_API_KEY: "" } as Record<string, string>;
 let client: Client;
@@ -19,9 +20,9 @@ const call = async (name: string, args: Record<string, unknown>) => {
 };
 
 beforeAll(async () => {
-  execFileSync(tsx, [path.join(repo, "server", "cli.ts"), "atlas", "demo"], { env, stdio: "ignore" });
+  execFileSync(process.execPath, [...cli, "atlas", "demo"], { env, stdio: "ignore" });
   client = new Client({ name: "test", version: "1" });
-  await client.connect(new StdioClientTransport({ command: tsx, args: [path.join(repo, "server", "cli.ts"), "mcp"], cwd: path.join(root, "projects", "acmepay"), env, stderr: "ignore" }));
+  await client.connect(new StdioClientTransport({ command: process.execPath, args: [...cli, "mcp"], cwd: path.join(root, "projects", "acmepay"), env, stderr: "ignore" }));
 }, 60_000);
 
 afterAll(async () => {

@@ -328,6 +328,7 @@ async function main() {
     case "start": {
       const { startDaemon } = await import("./_core/index");
       const port = flag(args, "--port");
+      if (port !== undefined && !(/^\d+$/.test(port) && Number(port) > 0 && Number(port) < 65536)) throw new Error(`--port must be a number between 1 and 65535 (got "${port}").`);
       await startDaemon({ port: port ? Number(port) : undefined, dev: args.includes("--dev") || process.env.NODE_ENV === "development" });
       return null;
     }
@@ -371,6 +372,7 @@ async function main() {
     case "-h":
       console.log(HELP);
       return 0;
+    case "version":
     case "--version":
     case "-v":
       console.log(JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version);

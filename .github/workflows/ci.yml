@@ -13,10 +13,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        node: [22, 24]
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: ["22.16", "24", "26"]
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
+      - run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
@@ -36,5 +40,34 @@ jobs:
         run: |
           node dist/cli.js plan validate examples/PLAN.md
           node dist/cli.js version
+          node dist/cli.js doctor || true
           node dist/cli.js run examples/DEMO-PLAN.md
           node dist/cli.js status demo | grep "2/2 phases passed"
+      - name: Install the packed tarball like a new user would
+        env:
+          MEADOW_HOME: ${{ runner.temp }}/meadow-pack-home
+        run: |
+          npm pack --silent
+          npm install -g ./meadow-*.tgz
+          meadow version
+          meadow plan validate examples/PLAN.md
+
+  old-node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile && pnpm build
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: An unsupported Node prints a clear message instead of crashing
+        run: |
+          set +e
+          out=$(node dist/cli.js version 2>&1); code=$?
+          echo "$out"
+          test $code -eq 1 && echo "$out" | grep -q "needs Node.js 22.16"

@@ -2,6 +2,8 @@
 
 ## Setup
 
+You need Node.js 22.16+ or 24+ and pnpm 10. Development works on macOS, Linux and Windows.
+
 ```bash
 pnpm install
 pnpm check
@@ -37,6 +39,8 @@ MEADOW_HOME=/tmp/meadow-dev MEADOW_PROJECTS_DIR=/tmp/meadow-dev/projects MEADOW_
 - `tests/` — unit, conformance (engine stream parsing against recorded sessions) and integration tests.
 
 ## Rules of thumb
+
+- Keep it cross-platform. Spawn programs through `core/exec.ts` (it handles `.cmd` shims and process trees on Windows), build paths with `path.join`, and never assume `/bin/sh`, `grep` or `find`. Tests that genuinely need POSIX use `it.skipIf(process.platform === "win32")`.
 
 - No network calls in tests. Use the fake engine, a scripted `LlmClient` (`setLlm`), and mocked `fetch` for Telegram.
 - Every engine adapter change needs a recorded session fixture in `tests/fixtures/sessions/` and a conformance test.

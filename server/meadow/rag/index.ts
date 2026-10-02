@@ -124,7 +124,7 @@ export async function reindexFiles(projectId: number, root: string, files: strin
   return { files: touched.length, chunks: rows.length };
 }
 
-const isSafeRelative = (file: string) => !path.isAbsolute(file) && !file.split("/").includes("..");
+const isSafeRelative = (file: string) => !path.isAbsolute(file) && !/^[a-zA-Z]:/.test(file) && !file.split(/[\\/]/).includes("..");
 
 export async function indexMemory(projectId: number, label: string, text: string) {
   if (containsSecret(text)) return;

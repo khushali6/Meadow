@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { homePath, loadConfig } from "../config";
-import { capture } from "../core/exec";
+import { which } from "../core/exec";
 import type { DoctorReport, Engine, EngineEvent, RunRequest } from "./base";
 import { Supervisor } from "./supervisor";
 
@@ -13,7 +13,8 @@ export function parsePlainLine(line: string): EngineEvent[] {
 
 /**
  * Runs any local coding CLI (aider, opencode, a script…). The command comes only from
- * ~/.meadow/config.json and receives the prompt as $MEADOW_PROMPT and $MEADOW_PROMPT_FILE.
+ * ~/.meadow/config.json and receives the prompt as $MEADOW_PROMPT and $MEADOW_PROMPT_FILE
+ * (%MEADOW_PROMPT_FILE% on Windows).
  */
 export class CustomEngine implements Engine {
   readonly name = "custom";
@@ -32,12 +33,12 @@ export class CustomEngine implements Engine {
     const report: DoctorReport = { engine: this.name, ready: false, version: null, checks: [], flags: {} };
     const command = this.command();
     if (!command) {
-      report.checks.push({ name: "command", ok: false, detail: "No custom command configured.", fix: 'Set engine.custom.command in ~/.meadow/config.json, e.g. "aider --yes-always --message-file \\"$MEADOW_PROMPT_FILE\\"".' });
+      report.checks.push({ name: "command", ok: false, detail: "No custom command configured.", fix: `Set engine.custom.command in ~/.meadow/config.json, e.g. "aider --yes-always --message-file \\"${process.platform === "win32" ? "%MEADOW_PROMPT_FILE%" : "$MEADOW_PROMPT_FILE"}\\"".` });
       return report;
     }
-    const program = command.split(/\s+/)[0];
-    const found = await capture("/bin/sh", ["-c", `command -v ${JSON.stringify(program)}`], { timeoutMs: 10_000 });
-    report.checks.push(found.code === 0 ? { name: "command", ok: true, detail: `${program} → ${found.stdout.trim()}` } : { name: "command", ok: false, detail: `${program} was not found on PATH.`, fix: `Install ${program} or fix engine.custom.command.` });
+    const program = (command.match(/^"([^"]+)"|^'([^']+)'|^(\S+)/) ?? []).slice(1).find(Boolean) ?? command;
+    const found = /[\\/]/.test(program) ? (fs.existsSync(program) ? program : null) : await which(program);
+    report.checks.push(found ? { name: "command", ok: true, detail: `${program} → ${found}` } : { name: "command", ok: false, detail: `${program} was not found on PATH.`, fix: `Install ${program} or fix engine.custom.command.` });
     report.ready = report.checks.every(check => check.ok);
     return report;
   }
@@ -56,7 +57,8 @@ export class CustomEngine implements Engine {
     const env = { ...req.env, MEADOW_PROMPT: req.prompt, MEADOW_PROMPT_FILE: promptFile, MEADOW_PROJECT_DIR: req.cwd, ...(req.model ? { MEADOW_MODEL: req.model } : {}) };
     yield { type: "session_started", title: `${this.label} started` };
     try {
-      yield* this.supervisor.start({ ...req, env }, "/bin/sh", ["-c", command], parsePlainLine);
+      // The platform shell: /bin/sh on macOS and Linux, cmd.exe on Windows (where variables are %MEADOW_PROMPT_FILE%).
+      yield* this.supervisor.start({ ...req, env }, command, [], parsePlainLine, { shell: true });
     } finally {
       fs.rmSync(promptFile, { force: true });
     }

@@ -37,9 +37,61 @@ function tokenMatches(expected: string, given: string | undefined) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+const lockFile = () => homePath("daemon.json");
+
+/** One daemon per MEADOW_HOME: a second one would double-poll Telegram and race the first for runs. */
+function acquireDaemonLock() {
+  try {
+    const held = JSON.parse(fs.readFileSync(lockFile(), "utf8")) as { pid: number; url?: string };
+    if (held.pid !== process.pid) {
+      process.kill(held.pid, 0);
+      throw new Error(`Meadow is already running (pid ${held.pid}${held.url ? `, ${held.url.split("?")[0]}` : ""}). Stop it first, or set MEADOW_HOME to run a separate instance.`);
+    }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ESRCH" && !(error instanceof SyntaxError)) {
+      if (code === "EPERM") throw new Error(`Another user's Meadow process holds ${lockFile()}. Stop it or delete the file if it is stale.`);
+      throw error;
+    }
+  }
+}
+
+function listen(server: ReturnType<typeof createServer>, port: number, host: string) {
+  return new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => {
+      server.off("listening", onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      server.off("error", onError);
+      resolve();
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(port, host);
+  });
+}
+
+/** Binds the configured port; when the user didn't ask for a specific one, walks up to ten ports further. */
+async function bindPort(server: ReturnType<typeof createServer>, preferred: number, host: string, explicit: boolean): Promise<number> {
+  const attempts = explicit ? 1 : 10;
+  for (let offset = 0; offset < attempts; offset++) {
+    try {
+      await listen(server, preferred + offset, host);
+      return preferred + offset;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EACCES") throw new Error(`Port ${preferred + offset} needs elevated permissions on this system. Use a port above 1024 with --port.`);
+      if (code === "EADDRNOTAVAIL") throw new Error(`Can't bind ${host}. Check server.host in config (it should be 127.0.0.1).`);
+      if (code !== "EADDRINUSE") throw error;
+    }
+  }
+  throw new Error(explicit ? `Port ${preferred} is in use. Pick another with --port, or stop whatever is using it.` : `Ports ${preferred}-${preferred + attempts - 1} are all in use. Pick a free one with --port.`);
+}
+
 export async function startDaemon(options: { port?: number; dev?: boolean } = {}) {
   const config = loadConfig();
-  const port = options.port ?? config.server.port;
+  acquireDaemonLock();
   getDb();
   const migrated = migrateUnavailableEngines();
   const interrupted = harness.recoverOnStartup();
@@ -110,10 +162,7 @@ export async function startDaemon(options: { port?: number; dev?: boolean } = {}
     serveStatic(app);
   }
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(port, config.server.host, () => resolve());
-  });
+  const port = await bindPort(server, options.port ?? config.server.port, config.server.host, options.port !== undefined || Boolean(process.env.MEADOW_PORT));
 
   await telegram.start();
   const notifier = new Notifier(telegram);
@@ -123,6 +172,8 @@ export async function startDaemon(options: { port?: number; dev?: boolean } = {}
   if (interrupted.length && config.harness.autoResume) setTimeout(() => harness.autoResume(interrupted), 5_000).unref();
 
   const url = `http://${config.server.host}:${port}/?token=${token}`;
+  fs.writeFileSync(lockFile(), JSON.stringify({ pid: process.pid, url: `http://${config.server.host}:${port}/` }), { mode: 0o600 });
+  if (port !== config.server.port && options.port === undefined) console.log(`  Port ${config.server.port} was busy, using ${port}.`);
   console.log(`\n  Meadow is running locally.\n  Dashboard: ${url}\n  Data: ${meadowHome()}\n${interrupted.length ? `  ${interrupted.length} interrupted run(s) ${config.harness.autoResume ? "will resume automatically" : "can be resumed from the dashboard or Telegram"}.\n` : ""}${migrated.map(item => `  ${item.project}: ${item.from} is not available yet, switched to ${item.to}.\n`).join("")}`);
 
   let closing = false;
@@ -140,6 +191,11 @@ export async function startDaemon(options: { port?: number; dev?: boolean } = {}
     await harness.shutdown();
     stopAllPreviews();
     server.close();
+    try {
+      if ((JSON.parse(fs.readFileSync(lockFile(), "utf8")) as { pid: number }).pid === process.pid) fs.rmSync(lockFile());
+    } catch {
+      /* already gone */
+    }
     setTimeout(() => process.exit(0), 1500).unref();
   };
   process.on("SIGINT", shutdown);

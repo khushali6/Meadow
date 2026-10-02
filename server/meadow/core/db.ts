@@ -280,7 +280,13 @@ export class Db {
   constructor(private readonly file: string, migrations: string[] = MIGRATIONS) {
     if (file !== ":memory:") fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     this.raw = this.open();
-    this.migrate(migrations);
+    try {
+      this.migrate(migrations);
+    } catch (error) {
+      // An open handle keeps the file locked on Windows.
+      this.raw.close();
+      throw error;
+    }
   }
 
   private open() {
@@ -314,7 +320,8 @@ export class Db {
     const row = this.raw.prepare("SELECT MAX(version) AS v FROM schema_version").get() as { v: number | null };
     const start = row?.v ?? 0;
     let current = start;
-    if (current >= migrations.length) return;
+    if (current > migrations.length) throw new MigrationError(`This database was written by a newer Meadow (schema v${current}; this version knows up to v${migrations.length}). Install the newer version again, or restore an older backup from ${path.dirname(this.file)}${path.sep}backups.`);
+    if (current === migrations.length) return;
     // A fresh database has nothing to lose; an existing one is copied before its schema changes.
     const backup = start > 0 ? this.backup(`v${start}`) : null;
     this.lastBackup = backup;

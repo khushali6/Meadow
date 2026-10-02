@@ -19,7 +19,8 @@ The agent's own thinking (clarifying questions, specs, plans, summaries) uses th
 
 ## Requirements
 
-- Node.js 22.5 or newer (uses the built-in `node:sqlite`)
+- macOS, Linux or Windows (native or WSL), on x64 or arm64
+- Node.js 22.16+ or 24+ (Meadow uses the built-in `node:sqlite` with full-text search; Node 23 and earlier 22.x releases don't ship it). The `meadow` command checks this first and tells you what to install.
 - git
 - A model provider for the agent (see [Agent model providers](#agent-model-providers)): a local gateway (FreeLLMAPI, Ollama, LM Studio) or a key for OpenAI, Anthropic, Gemini, OpenRouter or any OpenAI-compatible API
 - At least one coding engine:
@@ -27,10 +28,19 @@ The agent's own thinking (clarifying questions, specs, plans, summaries) uses th
   - Claude Code: coming soon. It shows in the dashboard but can't be selected yet; projects that used it keep their settings and run on your default engine until the adapter ships
   - Codex CLI (`codex`), logged in with `codex login`
   - Gemini CLI (`gemini`), signed in or with `GEMINI_API_KEY`
-  - Anything else (aider, opencode, a script) through the custom engine: set `engine.custom.command` in `~/.meadow/config.json`. It receives the prompt as `$MEADOW_PROMPT` and `$MEADOW_PROMPT_FILE`, runs in the project folder, and its exit code decides success.
+  - Anything else (aider, opencode, a script) through the custom engine: set `engine.custom.command` in `~/.meadow/config.json`. It receives the prompt as `$MEADOW_PROMPT` and `$MEADOW_PROMPT_FILE` (`%MEADOW_PROMPT_FILE%` on Windows, where the command runs in `cmd.exe`), runs in the project folder, and its exit code decides success.
 - Optional: Playwright + Chromium for screenshots, a Telegram bot token, `piper` + `ffmpeg` for spoken replies, `whisper.cpp` + `ffmpeg` for local voice transcription
 
 ## Quick start
+
+Meadow isn't on the npm registry yet. Install it from a release tarball:
+
+```bash
+npm install -g ./meadow-1.0.0.tgz   # from the GitHub release
+meadow doctor                        # platform, Node, git, data folder, engines, model provider
+```
+
+Or from source:
 
 ```bash
 pnpm install
@@ -56,6 +66,19 @@ Try the whole flow with no engine or LLM at all using the built-in fake engine:
 ```bash
 MEADOW_ENGINE=fake meadow run examples/DEMO-PLAN.md
 ```
+
+On Windows PowerShell: `$env:MEADOW_ENGINE="fake"; meadow run examples/DEMO-PLAN.md`.
+
+## Platform support
+
+The same build runs on macOS, Linux and Windows. CI tests every change on all three with Node 22.16, 24 and 26.
+
+- **Windows (native):** engine shims such as `codex.cmd` are started safely without a shell, stopping a run kills the whole process tree (`taskkill /T /F`), and `cmd:` checks run in `cmd.exe`. Checks Meadow generates use `node -e`, so they work in any shell; hand-written POSIX checks (`test -f`, `grep`) won't run in `cmd.exe`.
+- **WSL:** behaves like Linux. Keep repositories in the Linux filesystem (`~/code`), not `/mnt/c`, and install engines inside WSL. Open the dashboard from Windows at the printed `127.0.0.1` URL.
+- **Paths:** Setup accepts `~/code/app`, `C:\code\app`, UNC paths and quoted paths. Spaces, quotes, `$`, `%` and non-ASCII characters in paths are handled.
+- **Monorepos:** languages, frameworks and databases are detected in sub-folders (`services/*`, `apps/*`, `packages/*`); verify commands come from the root.
+
+[docs/EDGE-CASES.md](docs/EDGE-CASES.md) lists the situations that can still fail (old Node, proxies, network drives, ports, engines not logged in, Telegram blocked, clock skew, and more) with the fix for each.
 
 ## Commands
 
@@ -343,6 +366,7 @@ See [SECURITY.md](SECURITY.md) for the full model and how to report issues.
 - Signed updates need the maintainer to publish signed manifests and set the publisher key and `MEADOW_UPDATE_URL`. Until then, update checks say "not configured" and you upgrade with your package manager. Installing replaces the global npm package; it doesn't swap binaries in place.
 - Self-repair can reconnect and re-index, but it can't fix a wrong API key, a stopped model server or a corrupted database; it tells you what to do instead.
 - Change impact follows the edges CodeAtlas extracted. Calls made through dynamic dispatch, reflection or configuration it couldn't parse won't appear.
+- Hand-written `cmd:` checks run in the platform shell (`/bin/sh` or `cmd.exe`). A plan written with POSIX commands won't pass on native Windows; use `node -e` or tool commands (`npm test`) for plans you share across platforms.
 - Screenshots need Playwright; without it, web phases still pass on their checks but have no images.
 - The CLI flags of `cursor-agent` and `claude` change between versions. Meadow detects them from `--help` and ignores unknown output, but a major CLI change can still need an adapter update. `meadow doctor` shows what was detected.
 

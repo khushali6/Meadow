@@ -97,18 +97,20 @@ export function WelcomeView({ settings, overview, onNavigate }: { settings: Sett
   );
 }
 
+const looksAbsolute = (value: string) => /^["']?(\/|~(\/|\\|$)|[a-zA-Z]:[\\/]|\\\\)/.test(value.trim());
+
 function RepositoryStep({ suggested, projectId, onDone }: { suggested: string | null; projectId: number | null; onDone: () => void }) {
   const utils = trpc.useUtils();
   const [value, setValue] = useState(suggested ?? "");
   const [target, setTarget] = useState(suggested ?? "");
-  const detect = trpc.setup.detect.useQuery({ path: target }, { enabled: target.startsWith("/"), retry: false });
+  const detect = trpc.setup.detect.useQuery({ path: target }, { enabled: looksAbsolute(target), retry: false });
   const register = trpc.setup.register.useMutation({ onSuccess: () => { void utils.setup.state.invalidate(); void utils.overview.invalidate(); onDone(); } });
   return (
     <div className="welcome-body">
       <p>The full path to a repository on this machine. Meadow reads manifests, CI and editor configs to learn the stack; <code>.env</code> files and keys are never read.</p>
       <form className="search-row" onSubmit={event => { event.preventDefault(); setTarget(value.trim()); }}>
-        <input className="text-input" value={value} onChange={event => setValue(event.target.value)} placeholder="/Users/you/code/my-app" aria-label="Repository path" spellCheck={false} />
-        <MotionButton className="button secondary" disabled={!value.trim().startsWith("/")}>Detect</MotionButton>
+        <input className="text-input" value={value} onChange={event => setValue(event.target.value)} placeholder={navigator.userAgent.includes("Windows") ? "C:\\Users\\you\\code\\my-app" : "~/code/my-app"} aria-label="Repository path" spellCheck={false} />
+        <MotionButton className="button secondary" disabled={!looksAbsolute(value)}>Detect</MotionButton>
       </form>
       <ErrorNote error={detect.error} />
       {detect.data ? (

@@ -57,7 +57,7 @@ phases:
       - Add the feature module
     checks:
       - file_exists: src/feature.js
-      - cmd: test -f src/feature.js && echo feature-ok
+      - cmd: node -e "require('fs').accessSync('src/feature.js');console.log('feature-ok')"
         expect_regex: feature-ok
     done_when: The feature module exists
   - id: 3

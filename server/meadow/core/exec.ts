@@ -1,8 +1,15 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import crossSpawn from "cross-spawn";
 
-const isWindows = process.platform === "win32";
+export const isWindows = process.platform === "win32";
 
-const BASE_ENV_ALLOW = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "TERM", "TMPDIR", "TEMP", "TMP", "SYSTEMROOT", "COMSPEC", "PATHEXT", "APPDATA", "LOCALAPPDATA", "USERPROFILE", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "NVM_DIR", "VOLTA_HOME", "PNPM_HOME", "BUN_INSTALL"];
+/**
+ * On Windows, npm-installed CLIs are `.cmd` shims that Node refuses to spawn without a shell (since 20.12).
+ * cross-spawn resolves the shim and escapes every argument for cmd.exe, so prompts can't break out.
+ */
+const spawn = (command: string, args: string[], options: SpawnOptions): ChildProcess => (isWindows && !options.shell ? crossSpawn(command, args, options) : nodeSpawn(command, args, options));
+
+const BASE_ENV_ALLOW = ["PATH", "Path", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "TERM", "TMPDIR", "TEMP", "TMP", "SYSTEMROOT", "COMSPEC", "PATHEXT", "APPDATA", "LOCALAPPDATA", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "WINDIR", "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMDATA", "PROCESSOR_ARCHITECTURE", "NUMBER_OF_PROCESSORS", "OS", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "NVM_DIR", "VOLTA_HOME", "PNPM_HOME", "BUN_INSTALL"];
 
 /** A minimal environment allowlist: the user's full environment (and its secrets) never reaches child processes. */
 export function minimalEnv(extra: Record<string, string | undefined> = {}): Record<string, string> {
@@ -10,6 +17,11 @@ export function minimalEnv(extra: Record<string, string | undefined> = {}): Reco
   for (const key of BASE_ENV_ALLOW) {
     const value = process.env[key];
     if (value) env[key] = value;
+  }
+  // Windows env names are case-insensitive; pick up "SystemRoot", "ComSpec" etc. whatever their casing.
+  if (isWindows) {
+    const wanted = new Set(BASE_ENV_ALLOW.map(key => key.toUpperCase()));
+    for (const [key, value] of Object.entries(process.env)) if (value && wanted.has(key.toUpperCase()) && !(key.toUpperCase() in env)) env[key] = value;
   }
   for (const [key, value] of Object.entries(extra)) if (value !== undefined) env[key] = value;
   env.CI = env.CI ?? "1";
@@ -33,7 +45,7 @@ export function spawnGroup(command: string, args: string[], options: { cwd: stri
 export function killTree(child: ChildProcess, signal: NodeJS.Signals = "SIGTERM") {
   if (child.pid === undefined || child.exitCode !== null) return;
   if (isWindows) {
-    spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+    nodeSpawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true }).on("error", () => child.kill());
     return;
   }
   try {
@@ -86,17 +98,28 @@ export function runShell(command: string, options: { cwd: string; timeoutS: numb
 
 export function which(binary: string): Promise<string | null> {
   return new Promise(resolve => {
-    const child = spawn(isWindows ? "where" : "which", [binary], { stdio: ["ignore", "pipe", "ignore"] });
+    const child = nodeSpawn(isWindows ? "where" : "which", [binary], { stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
     let out = "";
     child.stdout.on("data", chunk => (out += chunk.toString()));
     child.on("error", () => resolve(null));
-    child.on("close", code => resolve(code === 0 ? out.trim().split("\n")[0] : null));
+    child.on("close", code => {
+      const lines = out.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+      if (code !== 0 || !lines.length) return resolve(null);
+      // `where` lists every match; the extensionless one (a POSIX script) can't run on Windows.
+      const runnable = isWindows ? lines.find(line => /\.(exe|cmd|bat|com)$/i.test(line)) : undefined;
+      resolve(runnable ?? lines[0]);
+    });
   });
 }
 
-export function capture(command: string, args: string[], options: { cwd?: string; timeoutMs?: number; env?: NodeJS.ProcessEnv } = {}): Promise<{ code: number | null; stdout: string; stderr: string }> {
+export function capture(command: string, args: string[], options: { cwd?: string; timeoutMs?: number; env?: NodeJS.ProcessEnv; input?: string } = {}): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise(resolve => {
-    const child = spawn(command, args, { cwd: options.cwd, env: options.env ?? process.env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    const child = spawn(command, args, { cwd: options.cwd, env: options.env ?? process.env, stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"], windowsHide: true });
+    if (options.input !== undefined) {
+      child.stdin?.on("error", () => undefined);
+      child.stdin?.end(options.input);
+    }
+    if (!child.stdout || !child.stderr) return resolve({ code: null, stdout: "", stderr: `Could not start ${command}` });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", chunk => (stdout += chunk.toString()));

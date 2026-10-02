@@ -4,6 +4,8 @@ import path from "node:path";
 import { stringify } from "yaml";
 import { ingestProject } from "../atlas/ingest";
 import { bus } from "../core/events";
+import { portableCheck } from "../core/checks";
+import { userPath } from "../core/paths";
 import { getSetting, putSetting } from "../core/settings";
 import { activePlan, createProject, getProject, latestPlan, listProjects, savePlanVersion, type ProjectRow } from "../projects";
 import { indexProject } from "../rag/index";
@@ -46,8 +48,8 @@ export class SetupError extends Error {}
 
 /** Registers an existing repository as a project (or returns the one already registered for that folder). */
 export async function registerRepository(root: string): Promise<{ project: ProjectRow; profile: ProjectProfile; created: boolean }> {
-  if (!path.isAbsolute(root)) throw new SetupError("Use the full path to the repository.");
-  const resolved = path.resolve(root);
+  const resolved = userPath(root);
+  if (!resolved) throw new SetupError("Use the full path to the repository.");
   if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) throw new SetupError(`${resolved} is not a folder.`);
   if (resolved === path.parse(resolved).root || resolved === os.homedir()) throw new SetupError("Pick a project folder, not your home or root directory.");
   const profile = detectProject(resolved);
@@ -81,25 +83,21 @@ export function initialPlanMarkdown(project: ProjectRow, profile: ProjectProfile
   const passing = baseline?.results.filter(result => result.passed) ?? [];
   const failing = baseline?.results.filter(result => !result.passed) ?? [];
   const testCmd = profile.commands.find(command => command.kind === "test")?.cmd;
-  const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
   // Every phase needs a check that can fail: known commands first, otherwise a measurable condition on the tree.
   const gate = (preferred: string | undefined, fallback: Array<{ cmd: string }>) => {
     const cmds = [preferred, ...passing.map(result => result.cmd)].filter((cmd, i, all): cmd is string => Boolean(cmd) && all.indexOf(cmd) === i);
     return [...fallback, ...cmds.slice(0, 2).map(cmd => ({ cmd }))];
   };
-  const hasTests = (dir: string) => ({ cmd: `find ${quote(dir)} -type f \\( -name '*test*' -o -name '*spec*' \\) -not -path '*/node_modules/*' | grep -q .` });
-  const fewerMarkers = (file: string, now: number) => ({ cmd: `n=$(grep -cE 'TODO|FIXME|HACK|XXX' ${quote(file)} 2>/dev/null); test "\${n:-0}" -lt ${now}` });
-  const writers = (table: string) => ({ cmd: `test "$(grep -rlE '(INSERT INTO|UPDATE)[[:space:]]+${table.replace(/[^A-Za-z0-9_]/g, "")}' --exclude-dir=node_modules --exclude-dir=.git . | cut -d/ -f2-3 | sort -u | wc -l)" -le 1` });
   const phases: Array<Record<string, unknown>> = [];
   const add = (phase: Record<string, unknown>) => phases.push({ id: `p${phases.length + 1}`, ...phase, ...(phases.length ? { depends_on: [`p${phases.length}`] } : {}) });
 
   if (failing.length) add({ name: "Make the baseline green", tasks: failing.map(result => `Fix \`${result.cmd}\` (exit ${result.exitCode ?? "timeout"}) without weakening the check`), checks: failing.map(result => ({ cmd: result.cmd })), done_when: "Every detected check passes" });
   const gaps = analysis.services.filter(service => service.tests === 0 && (service.callers || service.apis || service.incidents)).slice(0, 3);
-  if (gaps.length) add({ name: `Tests for ${gaps.map(gap => gap.name).join(", ")}`, tasks: gaps.map(gap => `Add tests for ${gap.name} covering its ${gap.apis} API${gap.apis === 1 ? "" : "s"}${gap.incidents ? ` and the past incident path` : ""}`), checks: gate(testCmd, gaps.filter(gap => gap.path).map(gap => hasTests(gap.path!))), done_when: "New tests run in the test suite and pass" });
-  else if (analysis.counts.files && !analysis.counts.tests) add({ name: "Add a test suite", tasks: [`Set up ${profile.testFrameworks[0] ?? "a test runner"} and cover the most-used modules${analysis.hotspots[0] ? ` starting with ${analysis.hotspots[0].path ?? analysis.hotspots[0].name}` : ""}`], checks: gate(testCmd, [hasTests(".")]), done_when: "The test command runs and passes" });
-  for (const shared of analysis.sharedTables.slice(0, 1)) add({ name: `Single writer for ${shared.table}`, tasks: [`Route writes to ${shared.table} through one service instead of ${shared.writers.join(", ")}`, "Keep behaviour identical and cover it with a test"], checks: gate(testCmd, [writers(shared.table)]), done_when: `Only one service writes to ${shared.table}` });
-  if (analysis.debt.length) add({ name: "Pay down marked debt", tasks: analysis.debt.slice(0, 4).map(item => `Resolve the ${item.markers} TODO/FIXME marker${item.markers === 1 ? "" : "s"} in ${item.path} or turn them into tracked issues`), checks: gate(undefined, analysis.debt.slice(0, 4).map(item => fewerMarkers(item.path, item.markers))), done_when: "Markers are resolved or documented, checks still pass" });
-  if (!phases.length) add({ name: "Document the architecture", tasks: ["Write docs/ARCHITECTURE.md from the knowledge graph: services, data flow, ownership and how to run checks"], checks: [{ file_exists: "docs/ARCHITECTURE.md" }, { cmd: "test $(wc -l < docs/ARCHITECTURE.md) -ge 20" }, ...gate(undefined, [])], done_when: "The architecture doc exists and checks pass" });
+  if (gaps.length) add({ name: `Tests for ${gaps.map(gap => gap.name).join(", ")}`, tasks: gaps.map(gap => `Add tests for ${gap.name} covering its ${gap.apis} API${gap.apis === 1 ? "" : "s"}${gap.incidents ? ` and the past incident path` : ""}`), checks: gate(testCmd, gaps.filter(gap => gap.path).map(gap => portableCheck.hasTests(gap.path!))), done_when: "New tests run in the test suite and pass" });
+  else if (analysis.counts.files && !analysis.counts.tests) add({ name: "Add a test suite", tasks: [`Set up ${profile.testFrameworks[0] ?? "a test runner"} and cover the most-used modules${analysis.hotspots[0] ? ` starting with ${analysis.hotspots[0].path ?? analysis.hotspots[0].name}` : ""}`], checks: gate(testCmd, [portableCheck.hasTests(".")]), done_when: "The test command runs and passes" });
+  for (const shared of analysis.sharedTables.slice(0, 1)) add({ name: `Single writer for ${shared.table}`, tasks: [`Route writes to ${shared.table} through one service instead of ${shared.writers.join(", ")}`, "Keep behaviour identical and cover it with a test"], checks: gate(testCmd, [portableCheck.singleWriter(shared.table)]), done_when: `Only one service writes to ${shared.table}` });
+  if (analysis.debt.length) add({ name: "Pay down marked debt", tasks: analysis.debt.slice(0, 4).map(item => `Resolve the ${item.markers} TODO/FIXME marker${item.markers === 1 ? "" : "s"} in ${item.path} or turn them into tracked issues`), checks: gate(undefined, analysis.debt.slice(0, 4).map(item => portableCheck.fewerMarkers(item.path, item.markers))), done_when: "Markers are resolved or documented, checks still pass" });
+  if (!phases.length) add({ name: "Document the architecture", tasks: ["Write docs/ARCHITECTURE.md from the knowledge graph: services, data flow, ownership and how to run checks"], checks: [{ file_exists: "docs/ARCHITECTURE.md" }, portableCheck.minLines("docs/ARCHITECTURE.md", 20), ...gate(undefined, [])], done_when: "The architecture doc exists and checks pass" });
 
   const front = {
     project: project.name,

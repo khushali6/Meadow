@@ -1,5 +1,13 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+
+/** Turns a user-typed folder (`~/code/app`, `"C:\My Code"`, `/srv/app/`) into an absolute path, or null when it is relative. */
+export function userPath(input: string): string | null {
+  let value = input.trim().replace(/^(["'])(.*)\1$/, "$2");
+  if (value === "~" || /^~[\\/]/.test(value)) value = path.join(os.homedir(), value.slice(1));
+  return path.isAbsolute(value) ? path.resolve(value) : null;
+}
 
 export class PathEscapeError extends Error {}
 

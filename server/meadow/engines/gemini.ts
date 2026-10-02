@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { getSecret } from "../config";
 import { capture, which } from "../core/exec";
@@ -97,8 +98,8 @@ export class GeminiEngine implements Engine {
     const flags = await this.detectFlags(binary);
     report.flags = flags;
     report.checks.push(flags["stream-json"] ? { name: "flags", ok: true, detail: "stream-json output supported" } : { name: "flags", ok: false, detail: "This gemini version has no stream-json output.", fix: "Update: npm install -g @google/gemini-cli" });
-    const settings = path.join(process.env.HOME ?? "", ".gemini", "settings.json");
-    const authed = Boolean(getSecret("GEMINI_API_KEY")) || fs.existsSync(path.join(process.env.HOME ?? "", ".gemini", "oauth_creds.json")) || fs.existsSync(settings);
+    const settings = path.join(os.homedir(), ".gemini", "settings.json");
+    const authed = Boolean(getSecret("GEMINI_API_KEY")) || fs.existsSync(path.join(os.homedir(), ".gemini", "oauth_creds.json")) || fs.existsSync(settings);
     report.checks.push(authed ? { name: "auth", ok: true, detail: getSecret("GEMINI_API_KEY") ? "GEMINI_API_KEY set" : "Gemini CLI login found" } : { name: "auth", ok: false, detail: "No Gemini login found", fix: "Run `gemini` once to sign in, or put GEMINI_API_KEY in ~/.meadow/secrets.env." });
     report.ready = report.checks.every(check => check.ok);
     return report;

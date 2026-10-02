@@ -12,6 +12,7 @@ import { getSecret, loadConfig, meadowHome, saveConfig, setSecret } from "./mead
 import { decide, listApprovals } from "./meadow/core/approvals";
 import { auditLog, RISK_POLICY } from "./meadow/core/audit";
 import { getDb } from "./meadow/core/db";
+import { userPath } from "./meadow/core/paths";
 import { fullDoctor, llmStatus } from "./meadow/doctor";
 import { PROVIDERS } from "./meadow/llm/catalog";
 import { healthCheck, llmRouting, providerFor, providerSummaries } from "./meadow/llm/router";
@@ -148,8 +149,9 @@ const setupRouter = router({
   complete: publicProcedure.mutation(() => completeOnboarding()),
   reset: publicProcedure.mutation(() => resetOnboarding()),
   detect: publicProcedure.input(z.object({ path: z.string().min(1).max(1000) })).query(({ input }) => {
-    if (!path.isAbsolute(input.path)) throw new Error("Use the full path to the repository.");
-    const profile = detectProject(path.resolve(input.path));
+    const resolved = userPath(input.path);
+    if (!resolved) throw new Error("Use the full path to the repository.");
+    const profile = detectProject(resolved);
     return { profile, lines: profileLines(profile) };
   }),
   register: publicProcedure.input(z.object({ path: z.string().min(1).max(1000) })).mutation(async ({ input }) => {

@@ -15,7 +15,7 @@ export class Supervisor {
   private children = new Map<string, ChildProcess>();
   private cancelled = new Set<string>();
 
-  start(req: RunRequest, command: string, args: string[], parse: LineParser): AsyncIterable<EngineEvent> {
+  start(req: RunRequest, command: string, args: string[], parse: LineParser, options: { shell?: boolean } = {}): AsyncIterable<EngineEvent> {
     const queue = new EventQueue<EngineEvent>();
     const logDir = homePath("logs", "runs");
     fs.mkdirSync(logDir, { recursive: true });
@@ -24,7 +24,7 @@ export class Supervisor {
 
     let child: ChildProcess;
     try {
-      child = spawnGroup(command, args, { cwd: req.cwd, env: req.env });
+      child = spawnGroup(command, args, { cwd: req.cwd, env: req.env, shell: options.shell });
     } catch (error) {
       queue.push({ type: "error", title: "Engine failed to start", detail: (error as Error).message, reason: "crashed" });
       queue.push({ type: "done", title: "Engine failed to start", ok: false, reason: "crashed" });
