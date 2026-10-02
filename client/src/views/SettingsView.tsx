@@ -4,6 +4,7 @@ import { ErrorNote, PageHeader, Toggle } from "../components/common";
 import { downloadJson } from "../lib/api";
 import { trpc } from "../lib/trpc";
 import type { Overview, ProjectSummary, Settings } from "../lib/types";
+import { MotionButton } from "../components/animation/motion";
 
 type Patch = Parameters<ReturnType<typeof trpc.updateSettings.useMutation>["mutate"]>[0];
 
@@ -41,7 +42,7 @@ function SecretField({ name, present, label, placeholder }: { name: "FREELLMAPI_
       </Row>
       <form className="search-row" onSubmit={event => { event.preventDefault(); save.mutate({ name, value }); }}>
         <input type="password" autoComplete="off" value={value} onChange={event => setValue(event.target.value)} placeholder={placeholder} aria-label={label} />
-        <button className="button secondary" disabled={value.trim().length < 8 || save.isPending}><KeyRound size={14} /> {present ? "Replace" : "Save"}</button>
+        <MotionButton className="button secondary" disabled={value.trim().length < 8 || save.isPending}><KeyRound size={14} /> {present ? "Replace" : "Save"}</MotionButton>
       </form>
       <ErrorNote error={save.error} />
     </div>
@@ -107,7 +108,7 @@ export function SettingsView({ settings, overview, project }: { settings: Settin
         <SecretField name="TELEGRAM_BOT_TOKEN" present={secrets.telegram} label="Bot token" placeholder="123456:ABC… from @BotFather" />
         {secrets.telegram ? (
           <Row label="Pair your account" hint="Send the code to your bot within 15 minutes.">
-            <button className="button secondary" onClick={() => pair.mutate()} disabled={pair.isPending}>New pairing code</button>
+            <MotionButton className="button secondary" onClick={() => pair.mutate()} disabled={pair.isPending}>New pairing code</MotionButton>
           </Row>
         ) : null}
         {pair.data ? <div className="pair-code"><span>Send this to {pair.data.bot ? `@${pair.data.bot}` : "your bot"}:</span><code>/pair {pair.data.code}</code></div> : null}
@@ -126,7 +127,7 @@ export function SettingsView({ settings, overview, project }: { settings: Settin
       </Section>
 
       <Section title="Health and data" description="Doctor checks your tools without changing anything. Exports contain plans, checks, runs and events for one project.">
-        <Row label="Doctor"><button className="button secondary" onClick={() => doctor.refetch()} disabled={doctor.isFetching}><Stethoscope size={14} /> {doctor.isFetching ? "Checking…" : "Run doctor"}</button></Row>
+        <Row label="Doctor"><MotionButton className="button secondary" onClick={() => doctor.refetch()} disabled={doctor.isFetching}><Stethoscope size={14} /> {doctor.isFetching ? "Checking…" : "Run doctor"}</MotionButton></Row>
         {doctor.data ? (
           <div className="doctor-list">
             {[...doctor.data.system, ...doctor.data.engines.flatMap(engine => engine.checks.map(check => ({ ...check, name: `${engine.engine}: ${check.name}`, optional: engine.engine !== doctor.data!.defaultEngine })))].map(check => (
@@ -137,7 +138,7 @@ export function SettingsView({ settings, overview, project }: { settings: Settin
             ))}
           </div>
         ) : null}
-        {project ? <Row label={`Export ${project.name}`}><button className="button secondary" onClick={() => exportRun.mutate({ projectId: project.id })} disabled={exportRun.isPending}><Download size={14} /> Download JSON</button></Row> : null}
+        {project ? <Row label={`Export ${project.name}`}><MotionButton className="button secondary" onClick={() => exportRun.mutate({ projectId: project.id })} disabled={exportRun.isPending}><Download size={14} /> Download JSON</MotionButton></Row> : null}
         <Row label="Projects folder" hint="Change with MEADOW_PROJECTS_DIR or ~/.meadow/config.json."><code>{config.projectsDir}</code></Row>
       </Section>
       </div>

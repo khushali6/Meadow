@@ -2,6 +2,9 @@ import { Toaster } from "@/components/ui/sonner";
 import { Activity, BookOpen, Boxes, ChevronDown, FileText, FolderGit2, KeyRound, Leaf, Menu, MessageSquarePlus, Moon, Settings2, ShieldCheck, Sun } from "lucide-react";
 import { useGSAP } from "@gsap/react";
 import { gsap } from "gsap";
+import { MotionConfig } from "motion/react";
+import { motion, MotionButton } from "./components/animation/motion";
+import { ActivityDot } from "./components/animation/technical";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useLocation } from "wouter";
@@ -36,10 +39,12 @@ const TOASTED = new Set(["phase_passed", "phase_blocked", "approval_requested", 
 export default function App() {
   return (
     <ErrorBoundary>
-      <ThemeProvider defaultTheme="light" switchable>
-        <Toaster position="bottom-right" />
-        <Shell />
-      </ThemeProvider>
+      <MotionConfig reducedMotion="user">
+        <ThemeProvider defaultTheme="light" switchable>
+          <Toaster position="bottom-right" />
+          <Shell />
+        </ThemeProvider>
+      </MotionConfig>
     </ErrorBoundary>
   );
 }
@@ -59,7 +64,7 @@ function SessionExpired() {
       <span className="session-copy">Meadow makes a new session token every time it starts. Open the link printed by <code>meadow start</code>, or paste the token from <code>~/.meadow/session-token</code>.</span>
       <form className="search-row session-form" onSubmit={event => { event.preventDefault(); if (value.trim()) saveToken(value); }}>
         <input type="password" value={value} onChange={event => setValue(event.target.value)} placeholder="Session token" aria-label="Session token" autoFocus />
-        <button className="button primary"><KeyRound size={14} /> Continue</button>
+        <MotionButton className="button primary"><KeyRound size={14} /> Continue</MotionButton>
       </form>
     </div>
   );
@@ -80,6 +85,7 @@ function Dashboard() {
   const projects = overview.data?.projects ?? [];
   const project = projects.find(item => item.id === projectId) ?? projects[0];
   const detail = trpc.project.useQuery({ id: project?.id ?? 0 }, { enabled: Boolean(project), refetchInterval: 10000 });
+  const anyRunning = projects.some(item => item.status === "running");
   const pendingApprovals = overview.data?.approvals.filter(item => item.status === "pending").length ?? 0;
 
   useEffect(() => {
@@ -114,7 +120,6 @@ function Dashboard() {
         .from(".page-header .eyebrow", { y: 14, autoAlpha: 0 }, "<0.12")
         .from(".page-header h1", { y: 28, autoAlpha: 0, clipPath: "inset(0 0 100% 0)" }, "<0.06")
         .from(".page-header p", { y: 14, autoAlpha: 0 }, "<0.16")
-        .from(".page-header .button", { y: 12, autoAlpha: 0, stagger: 0.07 }, "<0.08")
         .from(".run-meta-row, .memory-toolbar", { y: 14, autoAlpha: 0 }, "<0.1")
         .from(".panel, .project-card, .new-project-card, .settings-section", { y: 18, autoAlpha: 0, stagger: 0.045 }, "<0.08");
       if (reduceMotion) intro.progress(1);
@@ -127,7 +132,7 @@ function Dashboard() {
     if (!pageRef.current) return;
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const transition = gsap.timeline({ defaults: { duration: reduceMotion ? 0 : 0.34, ease: "power2.out" } });
-    transition.fromTo(pageRef.current, { autoAlpha: reduceMotion ? 1 : 0, y: reduceMotion ? 0 : 10 }, { autoAlpha: 1, y: 0 });
+    transition.fromTo(pageRef.current, { autoAlpha: reduceMotion ? 1 : 0, y: reduceMotion ? 0 : 10 }, { autoAlpha: 1, y: 0, clearProps: "transform" });
     return () => transition.kill();
   }, { scope: pageRef, dependencies: [location, ready], revertOnUpdate: true });
 
@@ -136,7 +141,7 @@ function Dashboard() {
   const current = NAV.find(item => item.key === location) ?? (location === "/settings" ? { label: "Runtime settings" } : { label: "Live console" });
 
   if (overview.isLoading) return <div className="loading-screen"><div className="brand-mark"><Leaf size={20} /></div><span>Connecting to the local Meadow daemon…</span></div>;
-  if (overview.error) return <div className="loading-screen"><div className="brand-mark"><Leaf size={20} /></div><span>Can't reach the Meadow daemon: {overview.error.message}</span><button className="button secondary" onClick={() => overview.refetch()}>Try again</button></div>;
+  if (overview.error) return <div className="loading-screen"><div className="brand-mark"><Leaf size={20} /></div><span>Can't reach the Meadow daemon: {overview.error.message}</span><MotionButton className="button secondary" onClick={() => overview.refetch()}>Try again</MotionButton></div>;
 
   const needsProject = (location === "/" || location === "/plans") && !project;
 
@@ -163,6 +168,7 @@ function Dashboard() {
         <nav className="main-nav">
           {NAV.map(item => (
             <button key={item.key} className={`nav-item ${location === item.key ? "active" : ""}`} onClick={() => go(item.key)} aria-current={location === item.key ? "page" : undefined}>
+              {location === item.key ? <motion.span layoutId="nav-indicator" className="nav-indicator" transition={{ type: "spring", stiffness: 520, damping: 40 }} /> : null}
               <item.icon size={17} /><span>{item.label}</span>
               {"badge" in item && pendingApprovals > 0 ? <b className="nav-badge">{pendingApprovals}</b> : null}
             </button>
@@ -170,7 +176,7 @@ function Dashboard() {
         </nav>
         <div className="nav-label nav-label-spaced">Runtime</div>
         <nav className="main-nav">
-          <button className={`nav-item ${location === "/settings" ? "active" : ""}`} onClick={() => go("/settings")}><Settings2 size={17} /><span>Runtime settings</span></button>
+          <button className={`nav-item ${location === "/settings" ? "active" : ""}`} onClick={() => go("/settings")}>{location === "/settings" ? <motion.span layoutId="nav-indicator" className="nav-indicator" transition={{ type: "spring", stiffness: 520, damping: 40 }} /> : null}<Settings2 size={17} /><span>Runtime settings</span></button>
         </nav>
         <div className="sidebar-spacer" />
         <div className="safety-card"><div className="safety-icon"><ShieldCheck size={15} /></div><div><strong>Local only</strong><span>Dashboard on 127.0.0.1. Engines work inside the project folder.</span></div></div>
@@ -181,13 +187,13 @@ function Dashboard() {
           <button className="mobile-menu icon-button" onClick={() => setMobileNav(true)} aria-label="Open navigation"><Menu size={19} /></button>
           <div className="breadcrumb"><span>Meadow</span><span className="crumb-separator">/</span>{project && (location === "/" || location === "/plans" || location === "/memory") ? <><span>{project.name}</span><span className="crumb-separator">/</span></> : null}<strong>{current.label}</strong></div>
           <div className="topbar-actions">
-            <div className={`status-inline ${connected ? "" : "offline"}`}>{connected ? <span className="pulse-dot" /> : <span className="offline-dot" />}<span>{connected ? "CONNECTED · 127.0.0.1" : "RECONNECTING…"}</span></div>
+            <div className={`status-inline ${connected ? "" : "offline"}`}><ActivityDot active={connected && anyRunning} tone={connected ? "idle" : "error"} /><span>{connected ? (anyRunning ? "EXECUTING · 127.0.0.1" : "CONNECTED · 127.0.0.1") : "RECONNECTING…"}</span></div>
             <button className="icon-button" onClick={() => toggleTheme?.()} aria-label="Toggle theme">{theme === "light" ? <Moon size={17} /> : <Sun size={17} />}</button>
           </div>
         </header>
         <div className="page-wrap" ref={pageRef}>
           {needsProject ? (
-            <EmptyState icon={Boxes} title="No projects yet" body="Describe what you want to build, or create an empty project and write a plan." action={<div className="header-actions"><button className="button secondary" onClick={() => go("/projects")}>New project</button><button className="button primary" onClick={() => go("/request")}>New request</button></div>} />
+            <EmptyState icon={Boxes} title="No projects yet" body="Describe what you want to build, or create an empty project and write a plan." action={<div className="header-actions"><MotionButton className="button secondary" onClick={() => go("/projects")}>New project</MotionButton><MotionButton className="button primary" onClick={() => go("/request")}>New request</MotionButton></div>} />
           ) : null}
           {location === "/" && project ? (detail.data ? <RunView key={project.id} detail={detail.data} onNavigate={go} /> : <div className="event-empty">Loading {project.name}…</div>) : null}
           {location === "/plans" && project ? (detail.data ? <PlanView key={project.id} detail={detail.data} onNavigate={go} /> : <div className="event-empty">Loading plan…</div>) : null}
@@ -196,7 +202,7 @@ function Dashboard() {
           {location === "/approvals" ? <ApprovalsView approvals={overview.data?.approvals ?? []} projects={projects} /> : null}
           {location === "/memory" ? <MemoryView key={project?.id ?? 0} project={project} /> : null}
           {location === "/settings" ? <SettingsView settings={settings.data} overview={overview.data} project={project} /> : null}
-          {!["/", "/plans", "/request", "/projects", "/approvals", "/memory", "/settings"].includes(location) ? <EmptyState icon={Leaf} title="Page not found" body="That page doesn't exist." action={<button className="button primary" onClick={() => go("/")}>Back to the live console</button>} /> : null}
+          {!["/", "/plans", "/request", "/projects", "/approvals", "/memory", "/settings"].includes(location) ? <EmptyState icon={Leaf} title="Page not found" body="That page doesn't exist." action={<MotionButton className="button primary" onClick={() => go("/")}>Back to the live console</MotionButton>} /> : null}
         </div>
       </main>
     </div>

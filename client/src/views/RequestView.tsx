@@ -4,6 +4,7 @@ import { ErrorNote, PageHeader } from "../components/common";
 import { screenshotUrl } from "../lib/api";
 import { trpc } from "../lib/trpc";
 import type { ChatReply } from "../lib/types";
+import { AnimatePresence, motion, MotionButton } from "../components/animation/motion";
 
 type Message = { id: number; from: "you" | "meadow"; text: string; buttons?: ChatReply["buttons"]; shots?: number[]; used?: boolean };
 
@@ -79,7 +80,7 @@ export function RequestView({ onNavigate }: { onNavigate: (path: string) => void
         eyebrow="00 / NEW REQUEST"
         title="Say what you want built."
         description="Plain language is fine. Meadow asks up to five short questions, writes a SPEC and a phased PLAN with real checks, and waits for your approval before touching code. Paste a full PLAN.md to skip straight to review."
-        action={messages.length ? <button className="button secondary" onClick={() => { setMessages([]); chatAction.mutate({ action: "cancel" }); }}>Clear conversation</button> : undefined}
+        action={messages.length ? <MotionButton className="button secondary" onClick={() => { setMessages([]); chatAction.mutate({ action: "cancel" }); }}>Clear conversation</MotionButton> : undefined}
       />
       <section className="panel chat-panel">
         <div className="chat-list" ref={listRef} aria-live="polite">
@@ -92,18 +93,20 @@ export function RequestView({ onNavigate }: { onNavigate: (path: string) => void
             </div>
           ) : null}
           {messages.map(message => (
-            <div key={message.id} className={`chat-message ${message.from}`}>
+            <motion.div key={message.id} className={`chat-message ${message.from}`} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}>
               <div className="chat-avatar">{message.from === "you" ? <User size={14} /> : <Bot size={14} />}</div>
               <div className="chat-bubble">
                 <pre>{message.text}</pre>
                 {message.shots?.length ? <div className="chat-shots">{message.shots.map(id => <a key={id} href={screenshotUrl(id)} target="_blank" rel="noreferrer"><img src={screenshotUrl(id)} alt="Screenshot" /></a>)}</div> : null}
+                <AnimatePresence initial={false}>
                 {message.buttons?.length && !message.used ? (
-                  <div className="chat-buttons">
+                  <motion.div className="chat-buttons" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.2 }}>
                     {message.buttons.map((row, i) => <div key={i} className="chat-button-row">{row.map(button => <button key={button.action} className="button secondary small" disabled={busy} onClick={() => press(message.id, button.label, button.action)}>{button.label}</button>)}</div>)}
-                  </div>
+                  </motion.div>
                 ) : null}
+                </AnimatePresence>
               </div>
-            </div>
+            </motion.div>
           ))}
           {busy ? <div className="chat-message meadow"><div className="chat-avatar"><Bot size={14} /></div><div className="chat-bubble thinking">{shot.isPending ? <><Camera size={14} /> Taking screenshots…</> : <><Loader2 size={14} className="spin-slow" /> Thinking…</>}</div></div> : null}
         </div>
@@ -117,7 +120,7 @@ export function RequestView({ onNavigate }: { onNavigate: (path: string) => void
             rows={3}
             aria-label="Message"
           />
-          <button className="button primary" type="submit" disabled={busy || !draft.trim()}><Send size={15} /> Send</button>
+          <MotionButton className="button primary" type="submit" disabled={busy || !draft.trim()}><Send size={15} /> Send</MotionButton>
         </form>
       </section>
     </>

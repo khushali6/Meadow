@@ -4,6 +4,7 @@ import { EmptyState, ErrorNote, PageHeader, StatusTag, relativeTime } from "../c
 import { lineDiff } from "../lib/diff";
 import { trpc } from "../lib/trpc";
 import type { ProjectDetail } from "../lib/types";
+import { MotionButton, TabIndicator } from "../components/animation/motion";
 
 const TEMPLATE = (project: string) => `---
 project: ${project}
@@ -85,9 +86,9 @@ export function PlanView({ detail, onNavigate }: { detail: ProjectDetail; onNavi
         description="Every phase needs at least one check that can actually fail. Meadow refuses to start until the plan validates, and every save is a new version you can compare or restore."
         action={
           <div className="header-actions">
-            <button className="button secondary" disabled={!loadedId || improve.isPending} onClick={() => loadedId && improve.mutate({ planId: loadedId })}><WandSparkles size={15} /> {improve.isPending ? "Improving…" : "Suggest better checks"}</button>
-            <button className="button secondary" disabled={!result?.ok || !dirty || save.isPending} onClick={() => save.mutate({ projectId: project.id, markdown })}><Save size={15} /> Save version</button>
-            <button className="button primary" disabled={!result?.ok || approve.isPending || save.isPending || (isApproved && detail.execution?.active)} onClick={saveAndApprove}><Play size={15} /> {isApproved ? "Start run" : "Approve and start"}</button>
+            <MotionButton className="button secondary" disabled={!loadedId || improve.isPending} onClick={() => loadedId && improve.mutate({ planId: loadedId })}><WandSparkles size={15} /> {improve.isPending ? "Improving…" : "Suggest better checks"}</MotionButton>
+            <MotionButton className="button secondary" disabled={!result?.ok || !dirty || save.isPending} onClick={() => save.mutate({ projectId: project.id, markdown })}><Save size={15} /> Save version</MotionButton>
+            <MotionButton className="button primary" disabled={!result?.ok || approve.isPending || save.isPending || (isApproved && detail.execution?.active)} onClick={saveAndApprove}><Play size={15} /> {isApproved ? "Start run" : "Approve and start"}</MotionButton>
           </div>
         }
       />
@@ -95,9 +96,9 @@ export function PlanView({ detail, onNavigate }: { detail: ProjectDetail; onNavi
       <div className="plan-layout">
         <section className="panel editor-panel">
           <div className="inspector-tabs" role="tablist">
-            <button className={tab === "plan" ? "selected" : ""} onClick={() => setTab("plan")}>PLAN.md</button>
-            <button className={tab === "spec" ? "selected" : ""} onClick={() => setTab("spec")} disabled={!latestPlan?.spec}>SPEC.md</button>
-            <button className={tab === "history" ? "selected" : ""} onClick={() => setTab("history")}><History size={13} /> Versions</button>
+            <button className={tab === "plan" ? "selected" : ""} onClick={() => setTab("plan")}>PLAN.md{tab === "plan" ? <TabIndicator id="plan-tab" /> : null}</button>
+            <button className={tab === "spec" ? "selected" : ""} onClick={() => setTab("spec")} disabled={!latestPlan?.spec}>SPEC.md{tab === "spec" ? <TabIndicator id="plan-tab" /> : null}</button>
+            <button className={tab === "history" ? "selected" : ""} onClick={() => setTab("history")}><History size={13} /> Versions{tab === "history" ? <TabIndicator id="plan-tab" /> : null}</button>
           </div>
           {tab === "plan" ? (
             <div className="editor-wrap">
@@ -117,8 +118,8 @@ export function PlanView({ detail, onNavigate }: { detail: ProjectDetail; onNavi
                     <div><strong>v{item.version}</strong> <span>{item.source} · {relativeTime(item.created_at)}</span></div>
                     <StatusTag status={item.status === "approved" ? "passed" : item.status === "superseded" ? "skipped" : "draft"} />
                     <div className="history-actions">
-                      <button className="button ghost small" onClick={() => setCompareId(compareId === item.id ? null : item.id)}>{compareId === item.id ? "Hide diff" : "Compare"}</button>
-                      <button className="button ghost small" onClick={() => { setMarkdown(item.raw); setLoadedId(item.id); setTab("plan"); }}>Restore</button>
+                      <MotionButton className="button ghost small" onClick={() => setCompareId(compareId === item.id ? null : item.id)}>{compareId === item.id ? "Hide diff" : "Compare"}</MotionButton>
+                      <MotionButton className="button ghost small" onClick={() => { setMarkdown(item.raw); setLoadedId(item.id); setTab("plan"); }}>Restore</MotionButton>
                     </div>
                   </div>
                 ))}
@@ -160,7 +161,7 @@ export function PlanView({ detail, onNavigate }: { detail: ProjectDetail; onNavi
               ))}
             </div>
           ) : null}
-          {!latestPlan ? <EmptyState icon={FileText} title="Starting from a template" body="Edit it here, or let Meadow write one from a plain-language request." action={<button className="button secondary small" onClick={() => onNavigate("/request")}>Use a request instead</button>} /> : null}
+          {!latestPlan ? <EmptyState icon={FileText} title="Starting from a template" body="Edit it here, or let Meadow write one from a plain-language request." action={<MotionButton className="button secondary small" onClick={() => onNavigate("/request")}>Use a request instead</MotionButton>} /> : null}
         </aside>
       </div>
     </>

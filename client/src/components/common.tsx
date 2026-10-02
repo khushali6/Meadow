@@ -1,6 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import { AlertTriangle, CheckCircle2, CircleDot, Clock3, Loader2, PauseCircle, SkipForward, XCircle } from "lucide-react";
 import type { ReactNode } from "react";
+import { motion, SwapText } from "./animation/motion";
 
 export const relativeTime = (date: string | null | undefined) => {
   if (!date) return "never";
@@ -53,8 +54,8 @@ export function StatusTag({ status }: { status: string }) {
   const Icon = info.icon;
   return (
     <span className={`status-tag ${info.tone}`}>
-      <Icon size={10} aria-hidden className={info.tone === "running" ? "spin-slow" : undefined} />
-      {info.label}
+      <Icon size={12} aria-hidden className={info.tone === "running" ? "spin-slow" : undefined} />
+      <SwapText value={info.label} />
     </span>
   );
 }
@@ -73,7 +74,7 @@ export function EmptyState({ icon: Icon, title, body, action }: { icon: LucideIc
 export function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (value: boolean) => void; label: string }) {
   return (
     <button className={`toggle ${checked ? "on" : ""}`} onClick={() => onChange(!checked)} role="switch" aria-checked={checked} aria-label={label}>
-      <span />
+      <motion.span layout transition={{ type: "spring", stiffness: 600, damping: 36 }} />
     </button>
   );
 }

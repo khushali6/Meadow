@@ -1,7 +1,9 @@
 import type { LucideIcon } from "lucide-react";
 import { AlertTriangle, Bot, Camera, Check, CheckCircle2, CircleDot, Command, FileCode2, FileText, GitBranch, Pause, Play, RotateCcw, ShieldCheck, SkipForward, Square, Terminal, WandSparkles, XCircle } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { EmptyState, ErrorNote, PageHeader, StatusTag, clockTime, relativeTime } from "../components/common";
+import { MotionButton, Reveal, TabIndicator } from "../components/animation/motion";
+import { ExecutionPipeline, useCheckpointLines, useStaggerNewRows, type PipelineStage } from "../components/animation/technical";
 import { screenshotUrl } from "../lib/api";
 import { trpc } from "../lib/trpc";
 import type { Event, Phase, ProjectDetail } from "../lib/types";
@@ -19,6 +21,22 @@ const FILTERS: Record<string, (event: Event) => boolean> = {
   Problems: event => ["error", "phase_blocked", "guard"].includes(event.type),
 };
 
+const STAGE_INDEX: Record<string, number> = { pending: -1, preparing: 0, running: 1, fixing: 1, verifying: 2, passed: 3, skipped: 3 };
+
+function pipelineFor(phase: Phase | undefined, engine: string, active: boolean): { stages: PipelineStage[]; current: number; state: "idle" | "active" | "done" | "blocked" } {
+  const status = phase?.status ?? "pending";
+  const stages: PipelineStage[] = [
+    { key: "prepare", label: "Prepare", detail: phase?.branch ? phase.branch.replace("meadow/", "") : "branch from main" },
+    { key: "engine", label: status === "fixing" ? "Fix" : "Engine", detail: `${engine} · ${phase?.attempts ?? 0} attempt${phase?.attempts === 1 ? "" : "s"}` },
+    { key: "verify", label: "Verify", detail: `guards + ${phase?.checks.length ?? 0} check${phase?.checks.length === 1 ? "" : "s"}` },
+    { key: "commit", label: "Commit", detail: phase?.commit_sha ? phase.commit_sha.slice(0, 7) : "fast-forward main" },
+  ];
+  if (status === "passed" || status === "skipped") return { stages, current: 3, state: "done" };
+  if (status === "blocked") return { stages, current: 2, state: "blocked" };
+  const current = STAGE_INDEX[status] ?? (phase?.attempts ? 1 : -1);
+  return { stages, current, state: active && current >= 0 ? "active" : "idle" };
+}
+
 export function RunView({ detail, onNavigate }: { detail: ProjectDetail; onNavigate: (path: string) => void }) {
   const { project, execution, phases, events } = detail;
   const utils = trpc.useUtils();
@@ -29,6 +47,8 @@ export function RunView({ detail, onNavigate }: { detail: ProjectDetail; onNavig
   const [hint, setHint] = useState("");
   const [confirmRollback, setConfirmRollback] = useState(false);
 
+  const phaseListRef = useRef<HTMLDivElement>(null);
+  const eventListRef = useRef<HTMLDivElement>(null);
   const current = phases.find(phase => !["passed", "skipped"].includes(phase.status));
   const selectedPhase = phases.find(phase => phase.id === selectedPhaseId) ?? current ?? phases[phases.length - 1];
   const filtered = useMemo(() => events.filter(FILTERS[filter]), [events, filter]);
@@ -36,13 +56,17 @@ export function RunView({ detail, onNavigate }: { detail: ProjectDetail; onNavig
   const progress = phases.length ? Math.round((passedCount / phases.length) * 100) : 0;
   const active = Boolean(execution?.active);
   const status = active ? "running" : execution?.status ?? (detail.approvedPlanId ? "ready" : "draft");
+  const pipelinePhase = current ?? phases[phases.length - 1];
+  const pipeline = pipelineFor(pipelinePhase, execution?.engine ?? project.engine, active);
+  useCheckpointLines(phaseListRef, passedCount);
+  useStaggerNewRows(eventListRef, filtered.map(event => event.id));
   const act = (action: "start" | "pause" | "resume" | "stop" | "retry" | "skip" | "rollback", withHint?: string) => control.mutate({ projectId: project.id, action, hint: withHint || undefined });
 
   if (!detail.approvedPlanId) {
     return (
       <>
         <PageHeader eyebrow={`01 / LIVE CONSOLE · ${project.name}`} title="No approved plan yet." description="Describe what you want on the Request page (or in Telegram), or write a PLAN.md in the Plan editor. Nothing runs until you approve a plan." />
-        <EmptyState icon={FileText} title={detail.latestPlan ? `Plan v${detail.latestPlan.version} is waiting for approval` : "Start with a request"} body={detail.latestPlan ? "Review it in the Plan editor and approve it to start." : "Meadow will ask a few questions, write SPEC.md and PLAN.md, then wait for you."} action={<button className="button primary" onClick={() => onNavigate(detail.latestPlan ? "/plans" : "/request")}>{detail.latestPlan ? "Review plan" : "New request"}</button>} />
+        <EmptyState icon={FileText} title={detail.latestPlan ? `Plan v${detail.latestPlan.version} is waiting for approval` : "Start with a request"} body={detail.latestPlan ? "Review it in the Plan editor and approve it to start." : "Meadow will ask a few questions, write SPEC.md and PLAN.md, then wait for you."} action={<MotionButton className="button primary" onClick={() => onNavigate(detail.latestPlan ? "/plans" : "/request")}>{detail.latestPlan ? "Review plan" : "New request"}</MotionButton>} />
       </>
     );
   }
@@ -58,49 +82,45 @@ export function RunView({ detail, onNavigate }: { detail: ProjectDetail; onNavig
         description="Every phase is measured by real checks, every change is on its own branch, and nothing runs outside this project folder."
         action={
           <div className="header-actions">
-            <button className="button secondary" onClick={() => setConfirmRollback(true)} disabled={control.isPending}><RotateCcw size={15} /> Roll back</button>
+            <MotionButton className="button secondary" onClick={() => setConfirmRollback(true)} disabled={control.isPending}><RotateCcw size={15} /> Roll back</MotionButton>
             {active ? (
               <>
-                <button className="button secondary" onClick={() => act("stop")} disabled={control.isPending}><Square size={14} /> Stop</button>
-                <button className="button primary" onClick={() => act("pause")} disabled={control.isPending}><Pause size={15} /> Pause</button>
+                <MotionButton className="button secondary" onClick={() => act("stop")} disabled={control.isPending}><Square size={14} /> Stop</MotionButton>
+                <MotionButton className="button primary" onClick={() => act("pause")} disabled={control.isPending}><Pause size={15} /> Pause</MotionButton>
               </>
             ) : (
-              <button className="button primary" onClick={() => act("start")} disabled={control.isPending || passedCount === phases.length}><Play size={15} /> {execution && ["paused", "waiting", "blocked", "interrupted"].includes(execution.status) ? "Resume" : passedCount === phases.length ? "All phases passed" : "Start run"}</button>
+              <MotionButton className="button primary" onClick={() => act("start")} disabled={control.isPending || passedCount === phases.length}><Play size={15} /> {execution && ["paused", "waiting", "blocked", "interrupted"].includes(execution.status) ? "Resume" : passedCount === phases.length ? "All phases passed" : "Start run"}</MotionButton>
             )}
           </div>
         }
       />
       <ErrorNote error={control.error} />
-      {confirmRollback ? (
-        <div className="banner warn" role="alertdialog">
+      <Reveal show={confirmRollback} className="banner warn" role="alertdialog">
           <AlertTriangle size={16} />
           <div><strong>Roll back to the last passing phase?</strong><span>The current phase branch is kept under failed/ for inspection; the working tree resets to the main branch.</span></div>
           <div className="banner-actions">
-            <button className="button secondary" onClick={() => setConfirmRollback(false)}>Cancel</button>
-            <button className="button danger" onClick={() => { act("rollback"); setConfirmRollback(false); }}>Roll back</button>
+            <MotionButton className="button secondary" onClick={() => setConfirmRollback(false)}>Cancel</MotionButton>
+            <MotionButton className="button danger" onClick={() => { act("rollback"); setConfirmRollback(false); }}>Roll back</MotionButton>
           </div>
-        </div>
-      ) : null}
-      {parked ? (
-        <div className={`banner ${execution!.status === "blocked" ? "error" : "warn"}`}>
-          {execution!.status === "blocked" ? <XCircle size={16} /> : <Pause size={16} />}
+      </Reveal>
+      <Reveal show={Boolean(parked)} className={`banner ${execution?.status === "blocked" ? "error" : "warn"}`}>
+          {execution?.status === "blocked" ? <XCircle size={16} /> : <Pause size={16} />}
           <div>
-            <strong>{execution!.status === "blocked" ? "This phase is stuck" : execution!.status === "interrupted" ? "Run was interrupted" : execution!.status === "waiting" ? "Phase passed — waiting for you" : "Run paused"}</strong>
-            <span>{execution!.note ?? "Resume to continue from the last verified state."}</span>
-            {execution!.status === "blocked" ? <input className="hint-input" placeholder="Optional hint for the agent, e.g. 'use the existing cart store'" value={hint} onChange={event => setHint(event.target.value)} /> : null}
+            <strong>{execution?.status === "blocked" ? "This phase is stuck" : execution?.status === "interrupted" ? "Run was interrupted" : execution?.status === "waiting" ? "Phase passed — waiting for you" : "Run paused"}</strong>
+            <span>{execution?.note ?? "Resume to continue from the last verified state."}</span>
+            {execution?.status === "blocked" ? <input className="hint-input" placeholder="Optional hint for the agent, e.g. 'use the existing cart store'" value={hint} onChange={event => setHint(event.target.value)} /> : null}
           </div>
           <div className="banner-actions">
-            {execution!.status === "blocked" ? (
+            {execution?.status === "blocked" ? (
               <>
-                <button className="button secondary" onClick={() => act("skip")}><SkipForward size={14} /> Skip phase</button>
-                <button className="button primary" onClick={() => { act("retry", hint); setHint(""); }}><RotateCcw size={14} /> Retry{hint ? " with hint" : ""}</button>
+                <MotionButton className="button secondary" onClick={() => act("skip")}><SkipForward size={14} /> Skip phase</MotionButton>
+                <MotionButton className="button primary" onClick={() => { act("retry", hint); setHint(""); }}><RotateCcw size={14} /> Retry{hint ? " with hint" : ""}</MotionButton>
               </>
             ) : (
-              <button className="button primary" onClick={() => act("resume")}><Play size={14} /> {execution!.status === "waiting" ? "Continue" : "Resume"}</button>
+              <MotionButton className="button primary" onClick={() => act("resume")}><Play size={14} /> {execution?.status === "waiting" ? "Continue" : "Resume"}</MotionButton>
             )}
           </div>
-        </div>
-      ) : null}
+      </Reveal>
       <div className="run-meta-row">
         <div className="run-meta">
           <span className="live-status">{active ? <span className="pulse-dot" /> : null}<StatusTag status={status} /> {current ? `phase ${phases.indexOf(current) + 1} of ${phases.length}` : `${phases.length} of ${phases.length}`}</span>
@@ -113,10 +133,16 @@ export function RunView({ detail, onNavigate }: { detail: ProjectDetail; onNavig
           <div className="budget-track"><span style={{ width: `${Math.min(100, (tokens / detail.budget.phaseTokens) * 100)}%` }} /></div>
         </div>
       </div>
+      {phases.length ? (
+        <section className="pipeline-section" aria-label="Current phase pipeline">
+          <div className="pipeline-head"><span className="panel-kicker">Phase {Math.max(1, phases.indexOf(pipelinePhase) + 1)} of {phases.length} · execution pipeline</span><strong>{pipelinePhase?.name}</strong></div>
+          <ExecutionPipeline stages={pipeline.stages} current={pipeline.current} state={pipeline.state} />
+        </section>
+      ) : null}
       <div className="run-grid">
         <section className="panel phases-panel" aria-label="Phases">
           <div className="panel-heading"><div><span className="panel-kicker">Execution plan</span><h2>Phases</h2></div><span className="progress-label">{passedCount}/{phases.length} passed</span></div>
-          <div className="phase-list">
+          <div className="phase-list" ref={phaseListRef}>
             {phases.map((phase, index) => {
               const done = phase.status === "passed";
               const isCurrent = phase.id === current?.id;
@@ -140,14 +166,14 @@ export function RunView({ detail, onNavigate }: { detail: ProjectDetail; onNavig
 
         <section className="panel events-panel" aria-label="Live event stream">
           <div className="panel-heading event-heading"><div><span className="panel-kicker">Live event stream</span><h2>What Meadow is doing</h2></div><div className="event-count">{active ? <span className="pulse-dot" /> : null} {filtered.length} events</div></div>
-          <div className="filter-row"><div className="filter-tabs" role="tablist">{Object.keys(FILTERS).map(name => <button key={name} role="tab" aria-selected={filter === name} className={filter === name ? "selected" : ""} onClick={() => setFilter(name)}>{name}</button>)}</div></div>
-          <div className="event-list" aria-live="polite">
+          <div className="filter-row"><div className="filter-tabs" role="tablist">{Object.keys(FILTERS).map(name => <button key={name} role="tab" aria-selected={filter === name} className={filter === name ? "selected" : ""} onClick={() => setFilter(name)}>{name}{filter === name ? <TabIndicator id="event-filter" /> : null}</button>)}</div></div>
+          <div className="event-list" aria-live="polite" ref={eventListRef}>
             {filtered.length === 0 ? <div className="event-empty">No events yet. Start the run to see the engine work.</div> : null}
             {filtered.slice().reverse().map(event => {
               const Icon = eventIcons[event.type] ?? CircleDot;
               const open = expanded === event.id;
               return (
-                <button className={`event-row ${open ? "selected" : ""}`} key={event.id} onClick={() => { setExpanded(open ? null : event.id); if (event.phaseId) setSelectedPhaseId(event.phaseId); }}>
+                <button className={`event-row ${open ? "selected" : ""}`} key={event.id} data-row-id={event.id} onClick={() => { setExpanded(open ? null : event.id); if (event.phaseId) setSelectedPhaseId(event.phaseId); }}>
                   <div className={`event-icon event-${event.type}`}><Icon size={14} /></div>
                   <div className="event-copy">
                     <div className="event-title"><strong>{event.title}</strong><time>{clockTime(event.ts)}</time></div>
@@ -177,7 +203,7 @@ function Inspector({ phase, index }: { phase: Phase; index: number }) {
   return (
     <section className="panel inspector-panel" aria-label="Evidence">
       <div className="panel-heading"><div><span className="panel-kicker">Phase {index + 1} evidence</span><h2>{phase.name}</h2></div></div>
-      <div className="inspector-tabs" role="tablist">{["Checks", "Diff", "Screenshots", "Prompt"].map(name => <button className={tab === name ? "selected" : ""} role="tab" aria-selected={tab === name} key={name} onClick={() => setTab(name)}>{name}</button>)}</div>
+      <div className="inspector-tabs" role="tablist">{["Checks", "Diff", "Screenshots", "Prompt"].map(name => <button className={tab === name ? "selected" : ""} role="tab" aria-selected={tab === name} key={name} onClick={() => setTab(name)}>{name}{tab === name ? <TabIndicator id="inspector-tab" /> : null}</button>)}</div>
       {tab === "Checks" ? (
         <div className="inspector-body check-stack">
           <div className="check-plan">

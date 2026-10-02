@@ -5,6 +5,9 @@ import superjson from "superjson";
 import App from "./App";
 import { getToken, initToken, markUnauthorized } from "./lib/api";
 import { trpc } from "./lib/trpc";
+import "@fontsource-variable/inter";
+import "@fontsource/jetbrains-mono/400.css";
+import "@fontsource/jetbrains-mono/500.css";
 import "./index.css";
 
 initToken();

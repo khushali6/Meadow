@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { EmptyState, ErrorNote, PageHeader, StatusTag, relativeTime } from "../components/common";
 import { trpc } from "../lib/trpc";
 import type { Approval, ProjectSummary } from "../lib/types";
+import { MotionButton } from "../components/animation/motion";
 
 function Countdown({ until }: { until: string }) {
   const [, tick] = useState(0);
@@ -35,8 +36,8 @@ export function ApprovalsView({ approvals, projects }: { approvals: Approval[]; 
               <div className="approval-foot">
                 <Countdown until={item.expires_at} />
                 <div className="approval-actions">
-                  <button className="button secondary" disabled={decide.isPending} onClick={() => decide.mutate({ id: item.id, decision: "denied" })}><X size={14} /> Deny</button>
-                  <button className="button primary" disabled={decide.isPending} onClick={() => decide.mutate({ id: item.id, decision: "approved" })}><Check size={14} /> Approve</button>
+                  <MotionButton className="button secondary" disabled={decide.isPending} onClick={() => decide.mutate({ id: item.id, decision: "denied" })}><X size={14} /> Deny</MotionButton>
+                  <MotionButton className="button primary" disabled={decide.isPending} onClick={() => decide.mutate({ id: item.id, decision: "approved" })}><Check size={14} /> Approve</MotionButton>
                 </div>
               </div>
             </div>

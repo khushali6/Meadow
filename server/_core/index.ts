@@ -69,6 +69,8 @@ export async function startDaemon(options: { port?: number; dev?: boolean } = {}
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
     const after = Number(req.headers["last-event-id"] ?? req.query.after ?? 0) || 0;
     const write = (event: { id: number }) => res.write(`id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`);
+    res.flushHeaders();
+    res.write(": connected\n\n");
     for (const event of eventsAfter(after, undefined, 1000)) write(event);
     const unsubscribe = bus.onEvent(write);
     const ping = setInterval(() => res.write(": ping\n\n"), 20_000);
