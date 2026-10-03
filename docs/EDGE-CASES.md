@@ -108,6 +108,12 @@ Meadow runs on macOS, Linux and Windows (native or WSL). This page lists the sit
 | Relay unreachable | Telegram messages can't be delivered while it's down. Runs continue, and their progress and approvals stay in the dashboard. | Check the relay URL and your network. |
 | Telegram blocked in your country or network | Neither the relay nor your own bot can reach Telegram. | Use the dashboard; Telegram is optional. |
 | Own bot token used by another program too | Telegram returns 409 Conflict for polling. | Use one bot per Meadow install. |
+| Short network drop, Wi-Fi switch or "fetch failed" | Sends are retried with backoff (1, 2, 4, 8 s) on network errors, timeouts and Telegram 5xx; rejections (400, 401, 403) are not retried. Polling reconnects with its own backoff. | Nothing to do. |
+| Longer outage or laptop asleep | Cards that still can't be sent wait in an offline queue (up to 100, oldest dropped first) and go out in order within 30 s of Telegram answering again. A live progress card keeps its message and is edited again instead of being posted twice. | Nothing to do; the dashboard has everything meanwhile. |
+| A file sent in chat | `.md`, `.txt` and `.yaml` files are read: a PLAN.md is imported for review, anything else starts a new project from it (the caption, if any, is the request; a `/command` caption runs that command). Empty, binary, non-UTF-8, unsupported or over-20 MB files get a reply saying why. Photos get "I can't read images yet". | Send the plan or spec as a text file, or type it. |
+| A plan approved while another project is running | It starts, and the reply says it's queued: the coding engine works on one step at a time across projects, so they take turns. | Nothing to do, or pause the other project. |
+| Several projects | `/projects` shows each with its status as buttons; tap one to switch. | — |
+| Notification level set to "failures" or "phases" | Questions from the engine, approvals and service sign-in cards still always arrive. | — |
 
 ## Approvals and time
 
@@ -124,6 +130,44 @@ Meadow runs on macOS, Linux and Windows (native or WSL). This page lists the sit
 | Server needs secrets | Only secret names Meadow manages are passed, never literal values from config files. | Add the secret in Runtime settings; then import the server. |
 | Server launched through `npx` on Windows | Started through cross-spawn so `.cmd` shims work. First launch downloads the package and can time out on slow networks. | Install the server globally, then point the config at it. |
 | Server marks a destructive tool as read-only | Meadow trusts the tool name over the hint: destructive-sounding tools are gated, and refused over MCP. | — |
+
+## Guardrails and system access
+
+The coding engine can run commands inside the project. Every command it ran is checked against one policy table after each engine step, and the same rules go into the engine's own permission file (`.cursor/cli.json`) and, where the CLI supports it, its sandbox.
+
+| Situation | What happens | Fix |
+| --- | --- | --- |
+| The engine runs `sudo`, deletes outside the project, reads keys (`~/.ssh`, `~/.aws`, `.env`, keychains, `~/.meadow`), changes git remotes or force-pushes, pipes a download into a shell, edits shell profiles or launch agents, or uploads files somewhere | Forbidden. The CLI's deny list stops most of these up front; anything that still ran blocks the phase on the first attempt, is logged as DESTRUCTIVE in the audit log, and the card names the command. | Review the branch, roll back if anything looks wrong, then Retry. |
+| The engine needs something outside the project (Homebrew, apt, global npm tools, Docker, a deploy, `git push`) | It must call Meadow's `request_system_action`. You get a Telegram card: **Approve once**, **Deny**, or **Always allow this kind for this project**. Meadow runs it outside the sandbox and returns the output. If the engine ran it directly instead, the run continues with a notice telling it to use Meadow next time. | Answer the card. Remembered permissions live in `~/.meadow/grants/` (delete the file to forget them). |
+| An approval or question isn't answered | It expires and counts as deny; the engine is told to choose the safest option and say which one in its report. | — |
+| The engine floods you with questions or requests | At most 3 open questions and 3 open system requests per project; further ones are answered "choose the safest option" without reaching you. | — |
+| The engine edits its own rules (`.cursor/cli.json`, `.cursor/mcp.json`) | Both are restored after every step, the change is reverted from the branch, and the engine is told not to. If either file is part of your repository, Meadow leaves it alone and says so. | — |
+| A broker request file is tampered with | Meadow re-checks the command against the policy before running it, so a request changed to something forbidden is refused. Requests older than the approval window plus an hour are discarded. | — |
+| Package installs fail inside the engine's sandbox | Installs get local cache folders, but some tools still need more access. | Turn off **Run the engine in its sandbox** in Settings; the deny list and after-run checks still apply. |
+| Disk nearly full | A run won't start with under 500 MB free (`MEADOW_MIN_FREE_DISK_MB`). | Free space, then start again. |
+
+## Connected services (Supabase, GitHub, Docker)
+
+| Situation | What happens | Fix |
+| --- | --- | --- |
+| Supabase is connected in Cursor but the Cursor CLI isn't signed in | Detected with `agent mcp list`. A plan that needs Supabase waits before its first phase with a **Sign in to supabase** card (Telegram and Settings → Connected services). The browser opens on your computer. | Tap Sign in once and finish in the browser, then Resume. Meadow reuses it for every project. **Build without it** resumes with SQLite instead. |
+| Supabase sign-in expires during a run | When the engine's report mentions an auth error and the service now needs sign-in, the same card is sent. | Sign in, then Retry the phase. |
+| Several Supabase organisations | You're asked once on Telegram which to use; the choice is saved (Settings shows it with **Forget**). One organisation is used without asking. | — |
+| A Supabase project with the app's name already exists | It's reused, never recreated. Paused projects aren't reused. | — |
+| Free plan already has 2 active projects | You're asked: reuse one of them (tables get a prefix), or pause one yourself and tap "I paused one". | — |
+| Creating a project would cost money | A **Create a paid Supabase project?** approval card; denied or expired means the app is built with a local database. Free projects are created without asking. | — |
+| The engine calls Supabase's `create_project` without Meadow's approval | Seen after the step; the phase blocks as `mcp-unbrokered`. Deleting, pausing, restoring or branching tools are denied outright. | — |
+| Supabase keys | Written to `.env.local`, which must be gitignored (checked by the Connect services phase); only the names go to `.env.example`. The engine is never allowed to print `.env` files. | — |
+| GitHub repository | For a project without a remote and with a saved GitHub token, Meadow creates a **private** repository when the run starts and pushes the base branch after each passed phase, never force. Projects that already have a remote are left alone. A token without the `repo` scope gets a message saying so. | `gh auth refresh -s repo`, then `./startup.sh`. Both are switches in Settings → Connected services. |
+| Docker is needed but not running | The engine asks through Meadow; you get "Start Docker Desktop, then tap Done", and Meadow waits up to 2 minutes for it. | Start Docker, or tap Skip to build without containers. |
+
+## Complex projects
+
+| Situation | What happens | Fix |
+| --- | --- | --- |
+| A big app (auth, database, payments, admin) | Plans can have up to 12 phases; more is a warning to split the project. | — |
+| The plan lists `services: [supabase]` | Meadow adds a first phase, "Connect services", whose checks verify `.env.local` is gitignored, has the Supabase URL and key, and `.env.example` lists the names, without printing the values. | — |
+| A service Meadow has no rules for (for example Stripe) | Allowed with a warning; the engine asks you through Telegram how to get it. | — |
 
 ## Optional extras
 

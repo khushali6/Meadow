@@ -4,6 +4,7 @@ import path from "node:path";
 import { homePath, loadConfig } from "../config";
 import { approvalAnswer, getApproval, requestApproval } from "../core/approvals";
 import { audit } from "../core/audit";
+import { getDb } from "../core/db";
 import { networkEnv, runShell } from "../core/exec";
 import { redact, tail } from "../core/redact";
 import { getProject } from "../projects";
@@ -38,11 +39,15 @@ function readJson<T>(file: string): T | null {
   }
 }
 
+const MAX_OPEN_QUESTIONS = 3;
+
 export type AskResult = { answered: boolean; answer: string | null; note: string };
 
 /** Asks the user on Telegram (and the dashboard) and waits for the answer. Unanswered questions expire. */
 export async function askHuman(input: { projectId: number; question: string; options?: string[]; context?: string; pollMs?: number }): Promise<AskResult> {
   const options = (input.options ?? []).map(option => option.trim()).filter(Boolean).slice(0, 6);
+  const open = getDb().get<{ n: number }>("SELECT COUNT(*) AS n FROM approvals WHERE project_id = ? AND kind = 'question' AND status = 'pending'", input.projectId)!.n;
+  if (open >= MAX_OPEN_QUESTIONS) return { answered: false, answer: null, note: `The user already has ${open} unanswered questions. Don't ask more now: choose the safest reasonable option, note it in your final report, and keep going.` };
   const { id } = requestApproval({ projectId: input.projectId, kind: "question", title: input.question.slice(0, 300), detail: [input.context?.slice(0, 1500), options.length ? `Options: ${options.join(" | ")}` : ""].filter(Boolean).join("\n\n"), detached: true, payload: { question: true, options } });
   audit({ projectId: input.projectId, agent: "engine", user: "engine", tool: "broker.ask_human", risk: "READ", args: input, approval: "pending", result: "pending", durationMs: 0, detail: input.question });
   while (true) {
@@ -71,6 +76,8 @@ export async function requestSystemAction(input: { projectId: number; command: s
   if (verdict.level === "allowed") return { ...base, status: "refused", exitCode: null, output: "This command is allowed inside the project. Run it yourself with your shell tool." };
   const kind = `system.${verdict.rule}`;
   const granted = hasGrant(project.id, kind);
+  const open = getDb().get<{ n: number }>("SELECT COUNT(*) AS n FROM approvals WHERE project_id = ? AND kind LIKE 'system.%' AND status = 'pending'", project.id)!.n;
+  if (!granted && open >= MAX_OPEN_QUESTIONS) return { ...base, status: "denied", exitCode: null, output: `The user already has ${open} system requests waiting. Wait for those, or find a way that stays inside the project.` };
   const approval = granted
     ? null
     : requestApproval({ projectId: project.id, kind, title: `Run on your computer: ${input.command.slice(0, 120)}`, detail: `${input.reason.slice(0, 600)}\n\n${verdict.reason}\nCommand: ${input.command}\nFolder: ${project.path}`, risk: "high", detached: true, payload: { remember: true, command: input.command } });
@@ -115,6 +122,10 @@ export async function executeReady(): Promise<number> {
       fs.rmSync(requestFile(request.id), { force: true });
       handled += 1;
     };
+    if (Date.now() - Date.parse(request.created) > (loadConfig().approvals.expiryS + 60 * 60) * 1000) {
+      finish({ status: "denied", exitCode: null, output: "This request is too old; it was not run." });
+      continue;
+    }
     const verdict = classifyCommand(request.command, request.cwd);
     if (verdict.level !== "approval") {
       finish({ status: "refused", exitCode: null, output: `Refused: ${verdict.reason}` });

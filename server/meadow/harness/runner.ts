@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { engineModel, getSecret, loadConfig } from "../config";
 import { requestApproval } from "../core/approvals";
 import { getDb, now } from "../core/db";
@@ -26,7 +27,7 @@ import { runGuards } from "./guards";
 import { audit } from "../core/audit";
 import { startBrokerExecutor } from "../guard/broker";
 import { ensureGithubRepo, pushBase } from "../services/github";
-import { connectedServices } from "../services/registry";
+import { connectedServices, engineMcpStatus } from "../services/registry";
 import { checkEngineGuards, writeEngineGuards } from "../guard/engineConfig";
 import { classifyCommand, classifyMcpCall, type Verdict } from "../guard/policy";
 import { compileFixPrompt, compilePhasePrompt, rulesFileContent } from "./prompts";
@@ -69,6 +70,16 @@ type PhaseOutcome = "passed" | "blocked" | "paused" | "stopped";
 
 const RESUMABLE: ExecutionStatus[] = ["paused", "waiting", "blocked", "interrupted"];
 const SPECIFIC_FAILURES = new Set(["auth", "missing_binary", "model_unavailable", "rate_limited"]);
+const minFreeDiskMb = () => Number(process.env.MEADOW_MIN_FREE_DISK_MB ?? 500);
+
+export function freeDiskMb(dir: string): number | null {
+  try {
+    const stats = fs.statfsSync(dir);
+    return Math.floor((stats.bavail * stats.bsize) / (1024 * 1024));
+  } catch {
+    return null;
+  }
+}
 
 export function engineLoginHint(engine: string): string {
   return engine === "custom" || engine === "fake" ? "Check the engine with `meadow doctor`" : "Open Setup → Coding engine and click Connect (or save an API key there)";
@@ -147,6 +158,8 @@ export class Harness {
     if (!active) throw new Error("This project has no approved plan yet. Create or import a plan and approve it first.");
     const meadowRoot = overlapsMeadow(project.path);
     if (meadowRoot) throw new Error(meadowOverlapMessage(project.path, meadowRoot));
+    const freeMb = freeDiskMb(project.path);
+    if (freeMb !== null && freeMb < minFreeDiskMb()) throw new Error(`Only ${freeMb} MB of disk space is free. Free up at least ${minFreeDiskMb()} MB (installs and builds need room), then start again.`);
     const engineName = options.engine ?? project.engine;
     assertSelectableEngine(engineName);
     await assertEngineReady(engineName);
@@ -498,6 +511,13 @@ export class Harness {
       const verdict = classifyMcpCall(call, brokerApprovals, brokerUsed);
       audit({ projectId: project.id, agent: state.engine.name, user: "engine", tool: `mcp: ${call}`, risk: verdict.level === "forbidden" ? "DESTRUCTIVE" : verdict.rule === "mcp-brokered" ? "HIGH_WRITE" : "READ", args: { call }, approval: verdict.rule === "mcp-brokered" ? "approved" : verdict.level === "forbidden" ? "refused" : "not_required", result: "ok", durationMs: 0, detail: `${verdict.rule}: ${call}` });
       if (verdict.level === "forbidden") forbidden.push({ ...verdict, command: `MCP ${call}` });
+    }
+    const servers = [...new Set(mcpCalls.map(call => call.split(":")[0]))].filter(Boolean);
+    if (servers.length && /unauthori[sz]ed|authenticat|sign ?in|log ?in|\b401\b|expired/i.test(report)) {
+      const statuses = await engineMcpStatus(true).catch((): Record<string, string> => ({}));
+      for (const server of servers.filter(name => statuses[name] === "needs_login")) {
+        this.emit(state, "setup", `${server} sign-in expired`, `The engine lost access to ${server} during this phase. Sign in again, then Retry the phase.`, { phaseId: row.id, payload: { service: server, needsLogin: true, ok: false } });
+      }
     }
     const restored = await checkEngineGuards(project.path, project.id).catch(() => null);
     const guardNote = [restored, ...new Set(warnings)].filter(Boolean).join("\n");

@@ -15,11 +15,18 @@ export class TelegramError extends Error {
   }
 }
 
+/** Network drops, timeouts and Telegram's own 5xx errors are worth retrying; rejections (400, 401, 403) are not. */
+export function isTransient(error: unknown): boolean {
+  if (error instanceof TelegramError) return (error.code ?? 0) >= 500;
+  const err = error as { name?: string; message?: string; cause?: { code?: string } };
+  return err?.name === "TimeoutError" || err?.name === "AbortError" || /fetch failed|network|socket|ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EPIPE/i.test(`${err?.message ?? ""} ${err?.cause?.code ?? ""}`);
+}
+
 /** Minimal Telegram Bot API client over long polling: outbound HTTPS only, no open ports. */
 export class TelegramApi {
   private lastSend = 0;
 
-  constructor(private token: string, private base = "https://api.telegram.org") {}
+  constructor(private token: string, private base = "https://api.telegram.org", private retry = { attempts: 4, baseMs: 1000 }) {}
 
   private async call<T>(method: string, body?: Record<string, unknown> | FormData, timeoutMs = 30_000): Promise<T> {
     const isForm = body instanceof FormData;
@@ -34,23 +41,28 @@ export class TelegramApi {
     return data.result;
   }
 
-  /** Keep under Telegram's ~1 msg/s per chat limit and honour retry_after. */
+  /** Keep under Telegram's ~1 msg/s per chat limit, honour retry_after, and ride out short network drops. */
   private async throttled<T>(fn: () => Promise<T>): Promise<T> {
-    for (let attempt = 0; attempt < 4; attempt++) {
+    let rateLimited = 0;
+    let dropped = 0;
+    while (true) {
       const wait = this.lastSend + 1100 - Date.now();
       if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
       this.lastSend = Date.now();
       try {
         return await fn();
       } catch (error) {
-        if (error instanceof TelegramError && error.code === 429) {
+        if (error instanceof TelegramError && error.code === 429 && rateLimited++ < 4) {
           await new Promise(resolve => setTimeout(resolve, ((error.retryAfter ?? 3) + 1) * 1000));
+          continue;
+        }
+        if (isTransient(error) && dropped++ < this.retry.attempts) {
+          await new Promise(resolve => setTimeout(resolve, this.retry.baseMs * 2 ** (dropped - 1)));
           continue;
         }
         throw error;
       }
     }
-    throw new TelegramError("Telegram rate limit retries exhausted", 429);
   }
 
   getMe() {

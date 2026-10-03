@@ -5,7 +5,7 @@ import { redact } from "../core/redact";
 import { getProject } from "../projects";
 import { engineLabel } from "../engines/registry";
 import { applyEvent, isFinal, renderProgress, startProgress, type PhaseProgress } from "./progress";
-import type { InlineButton, TelegramApi } from "./telegramApi";
+import { isTransient, type InlineButton, type TelegramApi } from "./telegramApi";
 
 type Outgoing = { text: string; buttons?: InlineButton[][]; photos?: Array<{ path: string; caption: string }>; urgent: boolean; silent?: boolean };
 
@@ -22,6 +22,7 @@ const PROGRESS_TYPES = new Set(["phase_started", "session_started", "thinking", 
 export function wantsEvent(event: MeadowEvent): boolean {
   const level = loadConfig().telegram.notificationLevel;
   if (["approval_requested", "phase_blocked"].includes(event.type)) return true;
+  if (event.type === "setup" && typeof event.payload?.service === "string") return true;
   if (event.type === "plan_ready" && event.payload?.status === "draft") return true;
   if (event.type === "execution_finished") return level !== "failures" || event.payload?.status !== "completed";
   if (level === "failures") return event.type === "error" && Boolean(event.executionId) && event.runId === null;
@@ -163,10 +164,12 @@ type Target = { ownerChat(): number | null; api: Pick<TelegramApi, "sendMessage"
 type LiveCard = { progress: PhaseProgress; messageId: number; chain: Promise<void>; timer: NodeJS.Timeout | null; lastText: string; lastEdit: number };
 
 const RENDER_DEBOUNCE_MS = 2500;
+const OFFLINE_LIMIT = 100;
 const HEARTBEAT_MS = 30_000;
 
 export class Notifier {
   private queue: Outgoing[] = [];
+  private offline: Outgoing[] = [];
   private outbox: Promise<void> = Promise.resolve();
   private cards = new Map<number, LiveCard>();
   private unsubscribe: (() => void) | null = null;
@@ -180,7 +183,10 @@ export class Notifier {
       void this.dispatch(event).catch(error => console.warn("[meadow] notify failed", redact((error as Error).message)));
     });
     this.quietTimer = setInterval(() => void this.flushQuiet(), 60_000);
-    this.heartbeat = setInterval(() => this.beat(), HEARTBEAT_MS);
+    this.heartbeat = setInterval(() => {
+      this.beat();
+      void this.flushOffline();
+    }, HEARTBEAT_MS);
   }
 
   stop() {
@@ -210,17 +216,39 @@ export class Notifier {
     await this.deliver(chat, card);
   }
 
-  /** Cards go out one at a time so a card's photos arrive before the next card. */
+  /**
+   * Cards go out one at a time so a card's photos arrive before the next card. A card that still can't be sent
+   * after the API's retries (Telegram or the network is down) waits in the offline queue, oldest dropped first.
+   */
   private deliver(chat: number, card: Outgoing): Promise<void> {
     const send = async () => {
       const api = this.channel.api;
       if (!api) return;
-      await api.sendMessage(chat, redact(card.text), card.buttons, { silent: card.silent });
+      try {
+        await api.sendMessage(chat, redact(card.text), card.buttons, { silent: card.silent });
+      } catch (error) {
+        if (!isTransient(error)) throw error;
+        this.offline.push(card);
+        if (this.offline.length > OFFLINE_LIMIT) this.offline.splice(0, this.offline.length - OFFLINE_LIMIT);
+        return;
+      }
       if (card.photos?.length) await api.sendPhotos(chat, card.photos).catch(error => console.warn("[meadow] photo send failed", (error as Error).message));
     };
     const next = this.outbox.then(send);
     this.outbox = next.catch(() => undefined);
     return next;
+  }
+
+  /** Re-sends cards queued while offline, in order, once Telegram answers again. */
+  async flushOffline() {
+    const chat = this.channel.ownerChat();
+    if (!chat || !this.channel.api || !this.offline.length) return;
+    const pending = this.offline.splice(0);
+    for (const card of pending) await this.deliver(chat, card).catch(() => undefined);
+  }
+
+  offlineCount() {
+    return this.offline.length;
   }
 
   /** One progress card per running phase, created on phase start and edited in place as events arrive. */
@@ -263,7 +291,7 @@ export class Notifier {
         card.lastEdit = Date.now();
       } catch (error) {
         console.warn("[meadow] progress card update failed", redact((error as Error).message));
-        card.messageId = 0;
+        if (!isTransient(error) && /not found|can't be edited|message to edit/i.test((error as Error).message)) card.messageId = 0;
       }
     });
   }
