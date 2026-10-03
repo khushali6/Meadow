@@ -1,7 +1,9 @@
 import { planNextSteps, projectStatus } from "../brief/next";
 import { chatAction, chatInvestigate } from "../atlas/chat";
 import { loadConfig, saveConfig, type NotificationLevel } from "../config";
-import { decide } from "../core/approvals";
+import { approvalOptions, decide, getApproval, pendingQuestion } from "../core/approvals";
+import { addGrant } from "../guard/grants";
+import { startMcpLogin } from "../services/registry";
 import { getDb, now } from "../core/db";
 import { slugify } from "../core/paths";
 import { redact } from "../core/redact";
@@ -197,6 +199,11 @@ export async function handleText(channel: string, chatId: string, text: string):
 async function routeText(state: ConversationState, text: string): Promise<Reply> {
   if (!text) return { text: "Send a request, or /help for commands." };
   if (text.startsWith("/")) return command(state, text);
+  const question = ["clarifying", "awaiting_hint", "awaiting_feature"].includes(state.stage) ? undefined : pendingQuestion();
+  if (question) {
+    decide(question.id, "approved", "telegram", text);
+    return { text: `Sent your answer to the engine: "${text.slice(0, 200)}"` };
+  }
   if (state.stage === "clarifying") {
     if (/^(just decide|you decide|whatever|skip|defaults?)$/i.test(text)) return justDecide(state);
     return recordAnswer(state, text);
@@ -432,6 +439,8 @@ async function routeAction(state: ConversationState, action: string, actor: stri
   switch (verb) {
     case "noop":
       return { text: "OK." };
+    case "svclogin":
+      return { text: startMcpLogin(a, actor).detail };
     case "cancel":
       Object.assign(state, { ...emptyState(), activeProjectId: state.activeProjectId });
       return { text: "Cancelled. Nothing was run." };
@@ -487,8 +496,21 @@ async function routeAction(state: ConversationState, action: string, actor: stri
       state.stage = "awaiting_feature";
       return { text: "Describe the feature to add." };
     case "approval": {
-      const row = decide(id, b === "yes" ? "approved" : "denied", actor);
+      const pending = getApproval(id);
+      const row = decide(id, b === "yes" || b === "always" ? "approved" : "denied", actor);
+      if (b === "always" && pending?.status === "pending" && row.project_id !== null && /^system\./.test(row.kind)) {
+        addGrant(row.project_id, row.kind);
+        return { text: `${row.title}: approved. Meadow won't ask again for this kind of action on this project.` };
+      }
+      if (row.kind === "question") return { text: row.status === "denied" ? "OK, the engine will pick the safest option and tell you which." : `${row.title}: ${row.status}.` };
       return { text: `${row.title}: ${row.status}.` };
+    }
+    case "reply": {
+      const options = approvalOptions(id);
+      const answer = options[Number(b)];
+      if (answer === undefined) return { text: "That option is no longer valid." };
+      const row = decide(id, "approved", actor, answer);
+      return { text: row.status === "approved" ? `Sent "${answer}" to the engine.` : "That question already closed." };
     }
     case "atlas":
       return { text: await chatAction(id, b, actor.startsWith("telegram") ? "telegram" : "ui") };

@@ -3,7 +3,7 @@ import { diffText, revertPaths, status, type StatusEntry } from "../core/git";
 import { isInside } from "../core/paths";
 import { redact } from "../core/redact";
 
-const PROTECTED = [/^PLAN\.md$/, /^SPEC\.md$/, /^\.meadow\//];
+const PROTECTED = [/^PLAN\.md$/, /^SPEC\.md$/, /^\.meadow\//, /^\.cursor\/cli\.json$/, /^\.cursor\/mcp\.json$/];
 const DEPENDENCY_FILES = /(^|\/)(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|requirements[^/]*\.txt|pyproject\.toml|poetry\.lock|uv\.lock|Pipfile(\.lock)?|Cargo\.(toml|lock)|go\.(mod|sum)|Gemfile(\.lock)?|composer\.(json|lock)|pom\.xml|build\.gradle(\.kts)?)$/;
 const SECRET_FILES = /(^|\/)(\.env(\.[^/]*)?|id_rsa|id_ed25519|.*\.pem|.*\.key|credentials(\.json)?|\.npmrc|\.pypirc)$/;
 
@@ -41,7 +41,7 @@ export async function runGuards(cwd: string, baseSha: string): Promise<GuardRepo
   }
   if (report.reverted.length) {
     await revertPaths(cwd, baseSha, report.reverted);
-    feedback.push(`You edited files you must not touch; they were reverted: ${report.reverted.join(", ")}. Do not modify PLAN.md, SPEC.md or .meadow/.`);
+    feedback.push(`You edited files you must not touch; they were reverted: ${report.reverted.join(", ")}. Do not modify PLAN.md, SPEC.md, .meadow/, .cursor/cli.json or .cursor/mcp.json.`);
   }
 
   const diff = await diffText(cwd, baseSha);

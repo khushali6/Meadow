@@ -53,6 +53,16 @@ export type MeadowConfig = {
   /** When a run starts, open the project in the editor and a terminal window following the engine's live output. */
   watch: { editor: boolean; terminal: boolean };
   approvals: { expiryS: number };
+  /**
+   * sandbox: run the coding engine in its OS sandbox when it supports one ("auto") or never ("off"); the command
+   * deny-list and after-run checks apply either way. broker: let the engine ask you questions and request installs.
+   */
+  guard: { sandbox: "auto" | "off"; broker: boolean };
+  /**
+   * Connected accounts Meadow reuses for every project. github: create a private repo for projects without a remote
+   * and push each passed phase. supabase: the organisation picked once (asked only when there are several).
+   */
+  services: { github: { createRepo: boolean; push: boolean }; supabase: { orgId: string | null; orgName: string | null } };
   atlas: {
     /** LLM reranking of fused results; falls back to fusion order when the gateway is unavailable. */
     rerank: boolean;
@@ -94,6 +104,8 @@ export const DEFAULT_CONFIG: MeadowConfig = {
   screenshots: { enabled: true },
   watch: { editor: true, terminal: true },
   approvals: { expiryS: 30 * 60 },
+  guard: { sandbox: "auto", broker: true },
+  services: { github: { createRepo: true, push: true }, supabase: { orgId: null, orgName: null } },
   atlas: {
     rerank: true,
     maxAgentSteps: 8,

@@ -9,7 +9,9 @@ import { publicProcedure, router } from "./_core/trpc";
 import { checkRelayUrl } from "./meadow/channels/relay";
 import { telegram, createPairingCode } from "./meadow/channels/telegram";
 import { getSecret, loadConfig, meadowHome, saveConfig, setSecret } from "./meadow/config";
-import { decide, listApprovals } from "./meadow/core/approvals";
+import { decide, getApproval, listApprovals } from "./meadow/core/approvals";
+import { addGrant } from "./meadow/guard/grants";
+import { connectedServices, startMcpLogin } from "./meadow/services/registry";
 import { auditLog, RISK_POLICY } from "./meadow/core/audit";
 import { getDb } from "./meadow/core/db";
 import { userPath } from "./meadow/core/paths";
@@ -72,6 +74,8 @@ const configPatch = z.object({
   }).partial().optional(),
   memory: z.object({ embeddings: z.enum(["local", "provider"]), embeddingProvider: providerId.nullable() }).partial().optional(),
   approvals: z.object({ expiryS: z.number().int().min(60) }).partial().optional(),
+  guard: z.object({ sandbox: z.enum(["auto", "off"]), broker: z.boolean() }).partial().optional(),
+  services: z.object({ github: z.object({ createRepo: z.boolean(), push: z.boolean() }).partial(), supabase: z.object({ orgId: z.string().max(100).nullable(), orgName: z.string().max(200).nullable() }).partial() }).partial().optional(),
   atlas: z.object({
     rerank: z.boolean(),
     liveUpdate: z.boolean(),
@@ -323,6 +327,18 @@ export const appRouter = router({
   }),
 
   decideApproval: publicProcedure.input(z.object({ id: z.number(), decision: z.enum(["approved", "denied"]) })).mutation(({ input }) => decide(input.id, input.decision, "dashboard")),
+  answerQuestion: publicProcedure.input(z.object({ id: z.number(), answer: z.string().trim().min(1).max(2000) })).mutation(({ input }) => {
+    if (getApproval(input.id)?.kind !== "question") throw new Error("That is not a question from the engine.");
+    return decide(input.id, "approved", "dashboard", input.answer);
+  }),
+  approveAlways: publicProcedure.input(z.object({ id: z.number() })).mutation(({ input }) => {
+    const row = getApproval(input.id);
+    if (!row || row.status !== "pending" || row.project_id === null || !/^system\./.test(row.kind)) throw new Error("Only pending system actions can be allowed for good.");
+    addGrant(row.project_id, row.kind);
+    return decide(input.id, "approved", "dashboard");
+  }),
+  services: publicProcedure.input(z.object({ projectId: z.number().nullable() }).optional()).query(({ input }) => connectedServices(input?.projectId ? getProject(input.projectId).path : undefined)),
+  serviceLogin: publicProcedure.input(z.object({ name: z.string().regex(/^[\w.-]{1,60}$/) })).mutation(({ input }) => startMcpLogin(input.name, "dashboard")),
 
   notes: publicProcedure.input(z.object({ projectId: z.number().nullable() })).query(({ input }) => notesFor(input.projectId)),
   addNote: publicProcedure.input(z.object({ projectId: z.number().nullable(), title: z.string().min(1).max(200), body: z.string().min(1).max(20_000) })).mutation(async ({ input }) => {

@@ -23,6 +23,11 @@ import { assertEngineReady } from "../setup/engines";
 import { autoChecks } from "../setup/verify";
 import { ACCEPTANCE_KEY, E2E_CHECK, acceptanceApplies, acceptancePhase, acceptanceRow, ensureAcceptanceRow, runAcceptance, type AcceptanceResult } from "./acceptance";
 import { runGuards } from "./guards";
+import { audit } from "../core/audit";
+import { startBrokerExecutor } from "../guard/broker";
+import { ensureGithubRepo, pushBase } from "../services/github";
+import { checkEngineGuards, writeEngineGuards } from "../guard/engineConfig";
+import { classifyCommand, classifyMcpCall, type Verdict } from "../guard/policy";
 import { compileFixPrompt, compilePhasePrompt, rulesFileContent } from "./prompts";
 import { summarizePhase } from "./summarize";
 import { verify, type CheckOutcome } from "./verifier";
@@ -151,6 +156,7 @@ export class Harness {
     }
     const state: Active = { executionId, projectId, engine, abort: new AbortController(), pauseRequested: false, stopRequested: false, engineRunKey: null, hint: options.hint ?? null, budgetOverride: previous?.note?.startsWith("Budget") ?? false, lastE2e: null };
     this.active.set(projectId, state);
+    startBrokerExecutor();
     this.emit(state, "execution_started", `Run started on ${engine.label}`, `${active.plan.phases.length} phases · plan v${active.row.version}`);
     this.loop(state, project, active.plan, active.row.id).catch(error => {
       this.finish(state, "failed", `Harness error: ${(error as Error).message}`);
@@ -249,6 +255,8 @@ export class Harness {
   }
 
   private async loop(state: Active, project: ProjectRow, plan: Plan, planId: number) {
+    const repo = await ensureGithubRepo(project).catch(error => ({ status: "skipped" as const, detail: `GitHub: ${(error as Error).message}`, url: undefined }));
+    if (repo.status === "created") this.emit(state, "message", "Created a private GitHub repository", `${repo.detail}${repo.url ? `\n${repo.url}` : ""}`);
     const rows = phasesFor(planId);
     const ordered = executionOrder(plan.phases);
     for (const phase of ordered) {
@@ -378,15 +386,20 @@ export class Harness {
     return null;
   }
 
-  private async runEngine(state: Active, project: ProjectRow, row: PhaseRow, prompt: string, kind: "initial" | "fix"): Promise<{ ok: boolean; reason: string; report: string; filesTouched: number }> {
+  private async runEngine(state: Active, project: ProjectRow, row: PhaseRow, prompt: string, kind: "initial" | "fix"): Promise<{ ok: boolean; reason: string; report: string; filesTouched: number; forbidden: Array<Verdict & { command: string }>; guardNote: string }> {
     const config = loadConfig();
+    const guardFiles = await writeEngineGuards(project.path, project.id).catch(error => ({ brokerAvailable: false, notes: [`Couldn't write the engine's guardrail files: ${(error as Error).message}`] }));
+    for (const note of guardFiles.notes) this.emit(state, "guard", "Engine guardrails", note, { phaseId: row.id });
+    const commands: string[] = [];
+    const mcpCalls: string[] = [];
+    const startedAt = now();
     const previousSession = getDb().get<{ session_id: string | null }>("SELECT session_id FROM runs WHERE phase_id = ? AND engine = ? AND session_id IS NOT NULL ORDER BY id DESC LIMIT 1", row.id, state.engine.name)?.session_id ?? undefined;
     const runId = getDb().insert("runs", { execution_id: state.executionId, phase_id: row.id, kind, engine: state.engine.name, status: "running", prompt, started_at: now() });
     const release = await this.engineSlot.acquire();
     if (state.stopRequested) {
       release();
       getDb().update("runs", runId, { status: "cancelled", finished_at: now(), exit_reason: "cancelled" });
-      return { ok: false, reason: "cancelled", report: "", filesTouched: 0 };
+      return { ok: false, reason: "cancelled", report: "", filesTouched: 0, forbidden: [], guardNote: "" };
     }
     const runKey = `run-${runId}`;
     state.engineRunKey = runKey;
@@ -416,6 +429,8 @@ export class Harness {
         this.recordEngineEvent(state, runId, row.id, event);
         if (event.sessionId) sessionId = event.sessionId;
         if (event.type === "file_edit") filesTouched += 1;
+        if (event.type === "command_run") commands.push(event.title);
+        if (event.type === "tool_call" && event.title.startsWith("MCP ")) mcpCalls.push(event.title.slice(4));
         if (event.type === "usage" && event.usage) {
           tokensIn += event.usage.tokensIn;
           tokensOut += event.usage.tokensOut;
@@ -436,7 +451,25 @@ export class Harness {
       getDb().update("runs", runId, { status: ok ? "completed" : state.stopRequested ? "cancelled" : "failed", exit_reason: reason, finished_at: now(), tokens_in: tokensIn, tokens_out: tokensOut, cost_usd: cost, session_id: sessionId });
       getDb().run("UPDATE executions SET tokens = tokens + ?, cost_usd = cost_usd + ? WHERE id = ?", tokensIn + tokensOut, cost, state.executionId);
     }
-    return { ok, reason, report, filesTouched };
+    const forbidden: Array<Verdict & { command: string }> = [];
+    const warnings: string[] = [];
+    for (const command of commands) {
+      const verdict = classifyCommand(command, project.path);
+      audit({ projectId: project.id, agent: state.engine.name, user: "engine", tool: `shell: ${command.split(/\s+/)[0] ?? "command"}`, risk: verdict.level === "forbidden" ? "DESTRUCTIVE" : "HIGH_WRITE", args: { command }, approval: verdict.level === "allowed" ? "not_required" : "refused", result: "ok", durationMs: 0, detail: `${verdict.rule}: ${command}` });
+      if (verdict.level === "forbidden") forbidden.push({ ...verdict, command });
+      else if (verdict.level === "approval") warnings.push(`You ran \`${command.slice(0, 120)}\` directly. ${verdict.reason} Next time call the Meadow tool request_system_action instead.`);
+    }
+    const brokerUsed = new Map<string, number>();
+    const brokerApprovals = (tool: string) => getDb().get<{ n: number }>("SELECT COUNT(*) AS n FROM audit_log WHERE project_id = ? AND tool = ? AND result = 'ok' AND ts >= ?", project.id, tool, startedAt)?.n ?? 0;
+    for (const call of mcpCalls) {
+      const verdict = classifyMcpCall(call, brokerApprovals, brokerUsed);
+      audit({ projectId: project.id, agent: state.engine.name, user: "engine", tool: `mcp: ${call}`, risk: verdict.level === "forbidden" ? "DESTRUCTIVE" : verdict.rule === "mcp-brokered" ? "HIGH_WRITE" : "READ", args: { call }, approval: verdict.rule === "mcp-brokered" ? "approved" : verdict.level === "forbidden" ? "refused" : "not_required", result: "ok", durationMs: 0, detail: `${verdict.rule}: ${call}` });
+      if (verdict.level === "forbidden") forbidden.push({ ...verdict, command: `MCP ${call}` });
+    }
+    const restored = await checkEngineGuards(project.path, project.id).catch(() => null);
+    const guardNote = [restored, ...new Set(warnings)].filter(Boolean).join("\n");
+    if (guardNote) this.emit(state, "guard", "Guardrail notice", guardNote, { phaseId: row.id });
+    return { ok, reason, report, filesTouched, forbidden, guardNote };
   }
 
   private recordEngineEvent(state: Active, runId: number, phaseId: number, event: EngineEvent) {
@@ -468,6 +501,7 @@ export class Harness {
     let noChangeStreak = 0;
     let rateLimitHits = 0;
     let guardFeedback = "";
+    let engineGuardNote = "";
     let engineReport = "";
     let impactText = "";
     if (config.harness.preflightImpact) {
@@ -537,6 +571,11 @@ export class Harness {
             continue;
           }
           rateLimitHits = 0;
+          engineGuardNote = result.guardNote;
+          if (result.forbidden.length) {
+            const first = result.forbidden[0];
+            return this.block(state, row, phase, phaseNumber, ordered.length, `because the engine ran a forbidden command (${first.rule})`, { check: { kind: "cmd", cmd: first.command }, label: first.command, passed: false, exitCode: null, output: `${first.reason}\nCommand: ${first.command}\nReview the branch before retrying; roll back if anything looks wrong.`, durationMs: 0 });
+          }
           if (["missing_binary", "auth", "model_unavailable"].includes(result.reason)) {
             const model = engineModel(state.engine.name);
             const why =
@@ -553,7 +592,7 @@ export class Harness {
         skipEngine = false;
 
         const guards = await runGuards(project.path, baseSha);
-        guardFeedback = guards.feedback;
+        guardFeedback = [guards.feedback, engineGuardNote].filter(Boolean).join("\n\n");
         if (guards.reverted.length || guards.escaped.length) this.emit(state, "guard", "Guard reverted out-of-scope edits", [...guards.escaped, ...guards.reverted].join(", "), { phaseId: row.id });
         if (guards.deletions.length > config.harness.massDeleteThreshold) {
           const approval = requestApproval({ projectId: project.id, kind: "mass_delete", title: `Delete ${guards.deletions.length} files?`, detail: `Phase "${phase.name}" deleted ${guards.deletions.length} files, e.g. ${guards.deletions.slice(0, 8).join(", ")}.`, risk: "high" });
@@ -674,6 +713,8 @@ export class Harness {
       phaseId: row.id,
       payload: { phaseNumber, total, checks: outcomes.map(outcome => outcome.label), files: diff.length, additions, deletions, dependencyChanges, screenshotIds: shotIds, commit: sha.slice(0, 10) },
     });
+    const push = await pushBase(project).catch(error => ({ pushed: false, detail: `Push failed: ${(error as Error).message}` }));
+    if (push.detail) this.emit(state, push.pushed ? "message" : "guard", push.pushed ? "Pushed to GitHub" : "GitHub push skipped", push.detail, { phaseId: row.id });
     if (e2e) {
       state.lastE2e = { results: e2e.results, runHow: e2e.runHow, url: e2e.url };
       e2e.results.forEach((result, index) => {

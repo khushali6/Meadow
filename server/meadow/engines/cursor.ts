@@ -1,12 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { getSecret } from "../config";
+import os from "node:os";
+import { getSecret, loadConfig } from "../config";
 import { capture, findBinary } from "../core/exec";
 import { failureReason, type DoctorReport, type Engine, type EngineEvent, type RunRequest } from "./base";
 import { Supervisor } from "./supervisor";
 
 const REQUIRED_FLAGS = ["--print", "--output-format"] as const;
-const OPTIONAL_FLAGS = ["--force", "--trust", "--workspace", "--model", "--mode", "--resume", "--sandbox"] as const;
+const OPTIONAL_FLAGS = ["--force", "--trust", "--workspace", "--model", "--mode", "--resume", "--sandbox", "--approve-mcps"] as const;
 
 function toolTitle(toolCall: Record<string, unknown>): { type: EngineEvent["type"]; title: string; detail?: string } {
   const [kind, value] = Object.entries(toolCall)[0] ?? ["tool", {}];
@@ -35,8 +36,25 @@ function toolTitle(toolCall: Record<string, unknown>): { type: EngineEvent["type
       return { type: "tool_call", title: `Tool ${fn.name ?? "call"}`, detail: fn.arguments?.slice(0, 300) };
     }
     default:
+      if (/mcp/i.test(kind)) {
+        const { server, tool } = mcpTool(args);
+        return { type: "tool_call", title: `MCP ${server}:${tool}` };
+      }
       return { type: "tool_call", title: kind.replace(/ToolCall$/, "") };
   }
+}
+
+/** Server and tool of an MCP call; the CLI has used several field names, and sometimes only "server-tool". */
+export function mcpTool(args: Record<string, unknown>): { server: string; tool: string } {
+  const pick = (...keys: string[]) => keys.map(key => args[key]).find(value => typeof value === "string" && value) as string | undefined;
+  let server = pick("providerIdentifier", "serverName", "server", "mcpServer");
+  let tool = pick("toolName", "tool", "name") ?? "tool";
+  if (!server) {
+    const split = tool.match(/^([\w.]+?)(?:__|-|:)(.+)$/);
+    if (split) [server, tool] = [split[1], split[2]];
+  }
+  const clean = (value: string) => value.toLowerCase().replace(/[^a-z0-9_.-]/g, "").slice(0, 60);
+  return { server: clean(server ?? "unknown"), tool: clean(tool) };
 }
 
 /** Parse one line of `cursor-agent --output-format stream-json`. Unknown line types are ignored, never fatal. */
@@ -117,7 +135,7 @@ export class CursorEngine implements Engine {
     const flags = await this.detectFlags(binary);
     report.flags = flags;
     const missing = [...REQUIRED_FLAGS.filter(flag => !flags[flag]), ...(flags["stream-json"] ? [] : ["stream-json output"])];
-    report.checks.push(missing.length ? { name: "flags", ok: false, detail: `This cursor-agent version lacks: ${missing.join(", ")}`, fix: "Run `cursor-agent update`." } : { name: "flags", ok: true, detail: `print + stream-json supported${flags["--force"] ? ", --force" : ""}${flags["--trust"] ? ", --trust" : ""}` });
+    report.checks.push(missing.length ? { name: "flags", ok: false, detail: `This cursor-agent version lacks: ${missing.join(", ")}`, fix: "Run `cursor-agent update`." } : { name: "flags", ok: true, detail: `print + stream-json supported${flags["--force"] ? ", --force" : ""}${flags["--trust"] ? ", --trust" : ""}${flags["--sandbox"] ? ", sandbox" : " (no sandbox: Meadow's deny-list and after-run checks still apply)"}` });
     const status = await capture(binary, ["status"], { timeoutMs: 20_000 });
     const statusText = (status.stdout + status.stderr).trim();
     const loggedIn = status.code === 0 && !/not logged in|unauthenticated|log ?in required/i.test(statusText);
@@ -149,10 +167,16 @@ export class CursorEngine implements Engine {
     } else if (flags["--force"]) {
       args.push("--force");
     }
+    const sandboxed = !req.readonly && flags["--sandbox"] && loadConfig().guard.sandbox !== "off";
+    if (sandboxed) args.push("--sandbox", "enabled");
+    if (flags["--approve-mcps"] && !req.readonly) args.push("--approve-mcps");
     if (req.model && flags["--model"]) args.push("--model", req.model);
     if (req.sessionId && flags["--resume"]) args.push("--resume", req.sessionId);
     args.push(req.prompt);
-    yield* this.supervisor.start(req, binary, args, parseCursorLine);
+    // The sandbox only lets the engine write inside the project and temp folders, so package caches move to temp.
+    const cache = path.join(os.tmpdir(), "meadow-cache");
+    const env = sandboxed ? { ...req.env, npm_config_cache: path.join(cache, "npm"), npm_config_store_dir: path.join(cache, "pnpm"), YARN_CACHE_FOLDER: path.join(cache, "yarn"), PIP_CACHE_DIR: path.join(cache, "pip"), UV_CACHE_DIR: path.join(cache, "uv") } : req.env;
+    yield* this.supervisor.start({ ...req, env }, binary, args, parseCursorLine);
   }
 
   cancel(runId: string) {

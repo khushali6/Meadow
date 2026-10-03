@@ -4,6 +4,7 @@ import { homePath } from "../config";
 import { redact, tail } from "../core/redact";
 import { untrusted, UNTRUSTED_RULE } from "../brief/brief";
 import { checkLabel, type Check, type Plan, type PlanPhase } from "../planning/format";
+import { POLICY_PROMPT } from "../guard/policy";
 
 export const PHASE_TEMPLATE = `# Role
 You are working inside an existing git repository on a branch dedicated to this phase.
@@ -165,5 +166,6 @@ export function rulesFileContent(plan: Plan, projectRules: string): string {
     projectRules.trim(),
     "- Never edit PLAN.md, SPEC.md or anything under .meadow/.",
     "- Never install packages globally or write outside this repository.",
+    POLICY_PROMPT,
   ].filter(Boolean).join("\n");
 }

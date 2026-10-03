@@ -141,6 +141,30 @@ function McpSection({ project }: { project: ProjectSummary | undefined }) {
   );
 }
 
+function ConnectedServices({ project, config, patch }: { project: ProjectSummary | undefined; config: Settings["config"]; patch: (value: Patch) => void }) {
+  const services = trpc.services.useQuery({ projectId: project?.id ?? null }, { refetchOnWindowFocus: false });
+  const login = trpc.serviceLogin.useMutation({ onSuccess: () => setTimeout(() => void services.refetch(), 5000) });
+  return (
+    <Section title="Connected services" description="What the coding engine can use for you. Meadow picks your accounts on its own, creates only free or private resources, and asks on Telegram before anything that costs money or deletes data.">
+      {(services.data ?? []).map(service => (
+        <Row key={service.name} label={service.name} hint={`${service.detail}${service.fix && service.status !== "needs_login" ? ` ${service.fix}` : ""}`}>
+          {service.status === "needs_login" && service.kind === "mcp"
+            ? <MotionButton className="button secondary" onClick={() => login.mutate({ name: service.name })} disabled={login.isPending}><Plug size={13} /> Sign in</MotionButton>
+            : <span className={`status-tag ${service.status === "ready" ? "passed" : "queued"}`}><span />{service.status.replace(/_/g, " ")}</span>}
+        </Row>
+      ))}
+      {services.isLoading ? <Row label="Checking services…"><Loader2 size={14} className="spin-slow" /></Row> : null}
+      {login.data ? <Row label="Sign-in" hint={login.data.detail}><span /></Row> : null}
+      {config.services.supabase.orgName ? <Row label="Supabase organisation" hint="Chosen once; used for every new project.">
+        <MotionButton className="button secondary" onClick={() => patch({ services: { supabase: { orgId: null, orgName: null } } })}>{config.services.supabase.orgName} · Forget</MotionButton>
+      </Row> : null}
+      <Row label="Create a private GitHub repository" hint="For new projects without a remote, using your saved GitHub token. Never public, never for projects that already have a remote."><Toggle checked={config.services.github.createRepo} onChange={value => patch({ services: { github: { createRepo: value } } })} label="Create GitHub repo" /></Row>
+      <Row label="Push passed phases" hint="Only to repositories Meadow created; never a force push."><Toggle checked={config.services.github.push} onChange={value => patch({ services: { github: { push: value } } })} label="Push to GitHub" /></Row>
+      <ErrorNote error={services.error ?? login.error} />
+    </Section>
+  );
+}
+
 function SelfHealing() {
   const utils = trpc.useUtils();
   const health = trpc.setup.health.useQuery(undefined, { refetchOnWindowFocus: false });
@@ -219,10 +243,14 @@ export function SettingsView({ settings, overview, project, onNavigate }: { sett
         <Row label="Impact analysis before each phase" hint="Adds the affected services, APIs, tables and owners to the engine's context."><Toggle checked={config.harness.preflightImpact} onChange={value => patch({ harness: { preflightImpact: value } })} label="Preflight impact" /></Row>
         <Row label="Enforce detected checks" hint="Checks that passed at baseline (typecheck, lint, test, build) run after every phase."><Toggle checked={config.harness.autoVerify} onChange={value => patch({ harness: { autoVerify: value } })} label="Auto verify" /></Row>
         <Row label="End-to-end tests in a browser" hint="After the last phase, Meadow runs the app like you would, clicks through every main flow in a headless browser and sends errors back to the engine. Screenshots go out only when every case passes."><Toggle checked={config.harness.e2e} onChange={value => patch({ harness: { e2e: value } })} label="End-to-end tests" /></Row>
+        <Row label="Run the engine in its sandbox" hint="Limits the coding engine to the project folder when its CLI supports a sandbox. Meadow's command deny-list and after-run checks apply either way. Turn off only if package installs fail inside the sandbox."><Toggle checked={config.guard.sandbox === "auto"} onChange={value => patch({ guard: { sandbox: value ? "auto" : "off" } })} label="Engine sandbox" /></Row>
+        <Row label="Let the engine ask you" hint="The engine can ask you questions and request system installs, Docker or cloud resources through Meadow; you answer on Telegram or here."><Toggle checked={config.guard.broker} onChange={value => patch({ guard: { broker: value } })} label="Engine broker" /></Row>
         <Row label="Resume interrupted runs on restart" hint="Continues from the last verified phase after a crash or reboot. Off: you resume by hand."><Toggle checked={config.harness.autoResume} onChange={value => patch({ harness: { autoResume: value } })} label="Auto resume" /></Row>
         <Row label="Check for signed updates" hint="Only manifests signed by the Meadow publisher key are trusted."><Toggle checked={config.updates.check} onChange={value => patch({ updates: { check: value } })} label="Update checks" /></Row>
         <Row label="Guided setup" hint="Detect a repository, build its knowledge, run checks and draft a first plan."><MotionButton className="button secondary" onClick={() => onNavigate("/welcome")}>Open setup</MotionButton></Row>
       </Section>
+
+      <ConnectedServices project={project} config={config} patch={patch} />
 
       <Section title="Budgets" description={`Today: ${(overview?.usage.tokens ?? 0).toLocaleString()} tokens across ${overview?.usage.runs ?? 0} engine runs.`}>
         <Row label="Tokens per phase"><NumberInput value={config.budget.phaseTokens} min={1000} step={1000} onCommit={value => patch({ budget: { phaseTokens: value } })} /></Row>

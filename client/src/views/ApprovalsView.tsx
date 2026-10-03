@@ -18,6 +18,9 @@ function Countdown({ until }: { until: string }) {
 export function ApprovalsView({ approvals, projects }: { approvals: Approval[]; projects: ProjectSummary[] }) {
   const utils = trpc.useUtils();
   const decide = trpc.decideApproval.useMutation({ onSettled: () => { utils.overview.invalidate(); utils.project.invalidate(); } });
+  const answer = trpc.answerQuestion.useMutation({ onSettled: () => utils.overview.invalidate() });
+  const always = trpc.approveAlways.useMutation({ onSettled: () => utils.overview.invalidate() });
+  const [replies, setReplies] = useState<Record<number, string>>({});
   const pending = approvals.filter(item => item.status === "pending");
   const decided = approvals.filter(item => item.status !== "pending").slice(0, 30);
   const projectName = (id: number | null) => projects.find(project => project.id === id)?.name ?? "Meadow";
@@ -25,7 +28,7 @@ export function ApprovalsView({ approvals, projects }: { approvals: Approval[]; 
   return (
     <>
       <PageHeader eyebrow="04 / POLICY GATES" title="Every risky action has a boundary." description="Mass deletions and similar actions pause the run until you decide. Anything you don't answer in time is denied, never approved." />
-      <ErrorNote error={decide.error} />
+      <ErrorNote error={decide.error ?? answer.error ?? always.error} />
       {pending.length === 0 ? <EmptyState icon={ShieldCheck} title="Nothing waiting" body="When a phase tries something risky, it shows up here and in Telegram." /> : null}
       <div className="approval-list">
         {pending.map(item => (
@@ -36,10 +39,20 @@ export function ApprovalsView({ approvals, projects }: { approvals: Approval[]; 
               <pre className="approval-detail">{item.detail}</pre>
               <div className="approval-foot">
                 <Countdown until={item.expires_at} />
-                <div className="approval-actions">
-                  <MotionButton className="button secondary" disabled={decide.isPending} onClick={() => decide.mutate({ id: item.id, decision: "denied" })}><X size={14} /> Deny</MotionButton>
-                  <MotionButton className="button primary" disabled={decide.isPending} onClick={() => decide.mutate({ id: item.id, decision: "approved" })}><Check size={14} /> Approve</MotionButton>
-                </div>
+                {item.kind === "question" ? (
+                  <div className="approval-actions">
+                    {(item.detail.match(/Options: (.*)$/m)?.[1].split(" | ") ?? []).map(option => <MotionButton key={option} className="button secondary" disabled={answer.isPending} onClick={() => answer.mutate({ id: item.id, answer: option })}>{option}</MotionButton>)}
+                    <input className="input" placeholder="Or type an answer" value={replies[item.id] ?? ""} onChange={event => setReplies(current => ({ ...current, [item.id]: event.target.value }))} />
+                    <MotionButton className="button primary" disabled={answer.isPending || !(replies[item.id] ?? "").trim()} onClick={() => answer.mutate({ id: item.id, answer: replies[item.id] })}><Check size={14} /> Send</MotionButton>
+                    <MotionButton className="button secondary" disabled={decide.isPending} onClick={() => decide.mutate({ id: item.id, decision: "denied" })}>Let it decide</MotionButton>
+                  </div>
+                ) : (
+                  <div className="approval-actions">
+                    <MotionButton className="button secondary" disabled={decide.isPending} onClick={() => decide.mutate({ id: item.id, decision: "denied" })}><X size={14} /> Deny</MotionButton>
+                    {item.kind.startsWith("system.") ? <MotionButton className="button secondary" disabled={always.isPending} onClick={() => always.mutate({ id: item.id })}>Always for this project</MotionButton> : null}
+                    <MotionButton className="button primary" disabled={decide.isPending} onClick={() => decide.mutate({ id: item.id, decision: "approved" })}><Check size={14} /> Approve</MotionButton>
+                  </div>
+                )}
               </div>
             </div>
           </div>

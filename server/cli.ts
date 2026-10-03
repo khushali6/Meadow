@@ -375,6 +375,11 @@ async function main() {
       await startMcpServer({ project: flag(args, "--project") });
       return null;
     }
+    case "broker": {
+      const { startBrokerServer } = await import("./meadow/guard/brokerServer");
+      await startBrokerServer();
+      return null;
+    }
     case "atlas":
       return atlas(args);
     case "init":

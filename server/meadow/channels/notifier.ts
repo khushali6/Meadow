@@ -68,6 +68,15 @@ export function formatEvent(event: MeadowEvent): Outgoing | null {
       if (p.budget) return { text: `⚠️ ${event.title}\n${event.detail}`, urgent: true, buttons: [[{ text: "Resume past cap", callback_data: `resume:${pid}` }, { text: "Stop", callback_data: `stop:${pid}` }]] };
       if (!id) return null;
       const minutes = Math.round(Number(p.expiresInS ?? 0) / 60);
+      if (p.question) {
+        const options = ((p.options as string[] | undefined) ?? []).slice(0, 6);
+        return {
+          text: `❓ The coding engine${pid ? ` on ${safeName(pid)}` : ""} needs your decision:\n${event.title}${event.detail && !event.detail.startsWith("Options:") ? `\n\n${event.detail.replace(/\n*Options:.*$/s, "")}` : ""}\n\n${options.length ? "Tap an option or reply" : "Reply"} with your answer. If nobody answers within ${minutes} min, it picks the safest option and tells you which.`,
+          urgent: true,
+          buttons: [...options.map((option, index) => [{ text: option.slice(0, 60), callback_data: `reply:${id}:${index}` }]), [{ text: "Let it decide", callback_data: `approval:${id}:no` }]],
+        };
+      }
+      if (p.remember) return { text: `Approval needed (${p.risk ?? "high"} risk): ${event.title}\n${event.detail}\n\nExpires in ${minutes} min and defaults to Deny.`, urgent: true, buttons: [[{ text: "Approve once", callback_data: `approval:${id}:yes` }, { text: "Deny", callback_data: `approval:${id}:no` }], [{ text: "Always allow this kind for this project", callback_data: `approval:${id}:always` }]] };
       return { text: `Approval needed (${p.risk ?? "medium"} risk): ${event.title}\n${event.detail}\n\nExpires in ${minutes} min and defaults to Deny.`, urgent: true, buttons: [[{ text: "Approve", callback_data: `approval:${id}:yes` }, { text: "Deny", callback_data: `approval:${id}:no` }]] };
     }
     case "execution_finished": {
@@ -106,6 +115,12 @@ export function formatEvent(event: MeadowEvent): Outgoing | null {
       return loadConfig().telegram.notificationLevel === "phases" ? { text: `▶️ ${event.title}`, urgent: false, silent: true } : null;
     case "message":
       return isFixNotice(event) ? { text: `🔁 ${event.title}\n${event.detail}`, urgent: false, silent: true } : null;
+    case "setup": {
+      const service = typeof p.service === "string" ? p.service : null;
+      if (!service) return null;
+      if (p.needsLogin) return { text: `🔌 ${event.title}\n${event.detail.slice(0, 800)}`, urgent: true, buttons: [[{ text: `Sign in to ${service}`, callback_data: `svclogin:${service}` }], ...(pid ? [[{ text: "Build without it", callback_data: `resume:${pid}` }]] : [])] };
+      return { text: `${p.ok ? "✅" : "⚠️"} ${event.title}\n${event.detail.slice(0, 800)}`, urgent: !p.ok };
+    }
     case "guard":
       return { text: `🛡 ${event.title}\n${event.detail.slice(0, 800)}`, urgent: false, silent: true };
     case "control": {
