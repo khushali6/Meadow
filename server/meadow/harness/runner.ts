@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { engineModel, getSecret, loadConfig } from "../config";
 import { requestApproval } from "../core/approvals";
 import { getDb, now } from "../core/db";
@@ -31,6 +32,7 @@ import { connectedServices, engineMcpStatus } from "../services/registry";
 import { checkEngineGuards, writeEngineGuards } from "../guard/engineConfig";
 import { classifyCommand, classifyMcpCall, type Verdict } from "../guard/policy";
 import { compileFixPrompt, compilePhasePrompt, rulesFileContent } from "./prompts";
+import { generateProjectDocs } from "./docs";
 import { summarizePhase } from "./summarize";
 import { verify, type CheckOutcome } from "./verifier";
 
@@ -299,6 +301,10 @@ export class Harness {
     const accepted = await this.acceptance(state, project, plan, planId, ordered);
     if (accepted === "stopped") return this.finish(state, "stopped", null);
     if (accepted === "paused" || accepted === "blocked") return;
+
+    // Generate project docs (.meadow/docs/) after all phases pass.
+    await this.generateDocs(state, project, plan);
+
     if (accepted === "passed" && state.lastE2e) {
       const { results, runHow, url } = state.lastE2e;
       return this.finish(state, "completed", nextRecommendation(project.id), { screenshotIds: [], runHow, url, e2e: { passed: results.filter(result => result.passed).length, total: results.length } });
@@ -785,6 +791,31 @@ export class Harness {
       .refresh(project.id, `phase ${phase.id} passed`, { forceGraph: true })
       .then(update => (update ? undefined : indexProject(project.id, project.path).then(() => liveGraph.markIndexed(project.id))))
       .catch(() => undefined);
+  }
+
+  /** Generate .meadow/docs/ (PRD, Design System, Architecture, Agents Guide) from the plan after completion. */
+  private async generateDocs(state: Active, project: ProjectRow, plan: Plan) {
+    try {
+      this.emit(state, "message", "Generating project docs", "Writing PRD, Design System, Architecture and Agents Guide to .meadow/docs/");
+      const planPath = path.join(project.path, "PLAN.md");
+      const planMd = fs.existsSync(planPath) ? fs.readFileSync(planPath, "utf8") : plan.body;
+      const result = await generateProjectDocs(project.path, plan, planMd);
+      const detail = [
+        result.generated.length ? `Generated: ${result.generated.join(", ")}` : "",
+        result.skipped.length ? `Skipped (LLM error): ${result.skipped.join(", ")}` : "",
+      ].filter(Boolean).join(" · ");
+      if (result.generated.length) {
+        // Commit the docs so they travel with the code on the next push.
+        await git.commitAll(project.path, `meadow: generate ${result.dir}`).catch(() => undefined);
+        const push = await pushBase(project).catch(error => ({ pushed: false, detail: `Push failed: ${(error as Error).message}` }));
+        this.emit(state, "message", "Project docs ready", `${detail}${push.pushed ? ` · Pushed to GitHub` : ""}`);
+      } else {
+        this.emit(state, "message", "Project docs skipped", detail || "LLM unavailable");
+      }
+    } catch (error) {
+      // Docs generation is best-effort; never block completion.
+      this.emit(state, "message", "Project docs skipped", (error as Error).message.slice(0, 300));
+    }
   }
 
   async shutdown() {

@@ -65,6 +65,12 @@ describe("engine command policy", () => {
     "rm -rf ./build/*",
     `rm -rf ${path.join(project, "tmp")}`,
     "rm -rf /tmp/meadow-test",
+    // Shell functions using positional params like $1, $@, $* are safe — they are function arguments,
+    // not named env-var expansions. Phase 5 screenshot helpers use this pattern.
+    `cd ${project} && shot() { rm -rf .meadow-tmp-shots/p-$1; }`,
+    `rm -rf .meadow-tmp-shots/p-$1`,
+    `rm -rf .tmp-$@`,
+    `rm -rf .tmp-$*`,
     "python3 -m venv .venv && .venv/bin/pip install -r requirements.txt",
     "cat .env.example",
     "docker ps",

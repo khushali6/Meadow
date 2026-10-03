@@ -4,6 +4,7 @@ import { getInvestigation, listInvestigations } from "./meadow/atlas/agents";
 import { mcpConfigSnippet } from "./meadow/atlas/mcpServer";
 import { closeExternalClients } from "./meadow/atlas/mcpClient";
 import { atlasStatus, createDemo, evaluate, nodeDetail, pathBetween, startIngest, startInvestigation, systemMap, toolCatalogue } from "./meadow/atlas/service";
+import { indexGithubRepo, listExternalRepos, removeExternalRepo } from "./meadow/atlas/github-index";
 import { listActions, runTool } from "./meadow/atlas/tools";
 import { publicProcedure, router } from "./_core/trpc";
 import { checkRelayUrl } from "./meadow/channels/relay";
@@ -116,6 +117,21 @@ const atlasRouter = router({
   evaluate: publicProcedure.input(z.object({ projectId: z.number() })).mutation(({ input }) => evaluate(input.projectId)),
   demo: publicProcedure.mutation(() => createDemo()),
   mcpConfig: publicProcedure.query(() => mcpConfigSnippet(path.resolve(process.argv[1] ?? "dist/cli.js"))),
+  // External GitHub repo indexing (business-decision memory).
+  indexGithubRepo: publicProcedure
+    .input(z.object({ projectId: z.number(), url: z.string().min(5).max(300), force: z.boolean().default(false) }))
+    .mutation(async ({ input }) => {
+      const steps: string[] = [];
+      const result = await indexGithubRepo(input.projectId, input.url, {
+        force: input.force,
+        onProgress: step => steps.push(step),
+      });
+      return { ...result, steps };
+    }),
+  listExternalRepos: publicProcedure.input(z.object({ projectId: z.number() })).query(({ input }) => listExternalRepos(input.projectId)),
+  removeExternalRepo: publicProcedure
+    .input(z.object({ projectId: z.number(), repo: z.string().min(3).max(200) }))
+    .mutation(({ input }) => { removeExternalRepo(input.projectId, input.repo); return { removed: input.repo }; }),
 });
 
 /** Memory stays local: embeddings may only come from a provider that runs on this machine. Cloud base URLs are fixed. */

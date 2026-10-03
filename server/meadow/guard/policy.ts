@@ -27,7 +27,9 @@ function deletionTargets(segment: string): string[] {
 function outsideProject(target: string, projectPath: string): boolean {
   if (!target) return false;
   const expanded = target.replace(/^\$\{?PWD\}?/, projectPath);
-  if (/^(~|\$HOME|\$\{HOME\}|%USERPROFILE%)/.test(expanded) || /[$`]/.test(expanded)) return true;
+  // Allow $1–$9, $@, $*, $#, $?, $!, $_, $$ (positional/special shell params in function bodies).
+  // Block anything else that looks like a named env-var expansion: $HOME, $VAR, ${VAR}, etc.
+  if (/^(~|\$HOME|\$\{HOME\}|%USERPROFILE%)/.test(expanded) || /[`]/.test(expanded) || /\$(?![0-9@*#?!_\-$])/.test(expanded)) return true;
   const resolved = path.resolve(projectPath, expanded.replace(/[*?[].*$/, "") || ".");
   const temp = [os.tmpdir(), "/tmp", "/private/tmp", "/var/folders"].some(dir => isInside(dir, resolved) && path.resolve(dir) !== resolved);
   return !temp && !isInside(projectPath, resolved);
