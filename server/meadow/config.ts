@@ -50,6 +50,8 @@ export type MeadowConfig = {
   /** `hosted` talks to the Meadow bot through a relay (one-click connect); `own` uses a bot token you created. */
   telegram: { mode: "hosted" | "own"; relayUrl: string; ownerId: number | null; notificationLevel: NotificationLevel; quietHours: { enabled: boolean; start: number; end: number }; voiceReplies: boolean };
   screenshots: { enabled: boolean };
+  /** When a run starts, open the project in the editor and a terminal window following the engine's live output. */
+  watch: { editor: boolean; terminal: boolean };
   approvals: { expiryS: number };
   atlas: {
     /** LLM reranking of fused results; falls back to fusion order when the gateway is unavailable. */
@@ -90,6 +92,7 @@ export const DEFAULT_CONFIG: MeadowConfig = {
   budget: { phaseTokens: 2_000_000, dailyTokens: 20_000_000, phaseWallClockS: 90 * 60 },
   telegram: { mode: "hosted", relayUrl: "", ownerId: null, notificationLevel: "all", quietHours: { enabled: false, start: 22, end: 8 }, voiceReplies: false },
   screenshots: { enabled: true },
+  watch: { editor: true, terminal: true },
   approvals: { expiryS: 30 * 60 },
   atlas: {
     rerank: true,

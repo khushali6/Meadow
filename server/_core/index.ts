@@ -14,6 +14,7 @@ import { expireOrphanedApprovals, sweepExpiredApprovals } from "../meadow/core/a
 import { getDb } from "../meadow/core/db";
 import { bus, eventsAfter, startForeignEventRelay } from "../meadow/core/events";
 import { harness } from "../meadow/harness/runner";
+import { startWatch } from "../meadow/harness/watch";
 import { startHealthMonitor } from "../meadow/setup/health";
 import { liveGraph } from "../meadow/setup/live";
 import { screenshotFile } from "../meadow/service";
@@ -167,6 +168,7 @@ export async function startDaemon(options: { port?: number; dev?: boolean } = {}
   await telegram.start();
   const notifier = new Notifier(telegram);
   notifier.start();
+  const stopWatch = startWatch();
   if (config.atlas.liveUpdate) liveGraph.start({ isBusy: id => harness.isActive(id) });
   const stopHealth = startHealthMonitor();
   if (interrupted.length && config.harness.autoResume) setTimeout(() => harness.autoResume(interrupted), 5_000).unref();
@@ -182,6 +184,7 @@ export async function startDaemon(options: { port?: number; dev?: boolean } = {}
     closing = true;
     console.log("\n  Stopping Meadow…");
     notifier.stop();
+    stopWatch();
     telegram.stop();
     liveGraph.stop();
     stopHealth();

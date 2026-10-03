@@ -4,6 +4,7 @@ import path from "node:path";
 import { DEFAULT_CONFIG, loadConfig } from "../config";
 import { capture, networkEnv, which } from "../core/exec";
 import { userPath } from "../core/paths";
+import { isMeadowSource } from "../core/self";
 import { isWsl } from "../doctor";
 import { listProjects } from "../projects";
 import { detectProject, profileLines } from "./detect";
@@ -78,6 +79,7 @@ function scan(query: string, budget = { dirs: 8000, ms: 2500 }) {
       const { dir, depth } = queue.shift()!;
       if (seen.has(dir) || seen.size > budget.dirs || Date.now() - started > budget.ms) continue;
       seen.add(dir);
+      if (isMeadowSource(dir)) continue;
       const project = (depth > 0 || root.self) && isProject(dir);
       if (project) {
         reposPerParent.set(path.dirname(dir), (reposPerParent.get(path.dirname(dir)) ?? 0) + 1);

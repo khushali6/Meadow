@@ -6,6 +6,7 @@ import { assertSelectableEngine, effectiveDefaultEngine, engineLabel, engineStat
 import { bus } from "./core/events";
 import { commitAll, currentBranch, ensureRepo, isClean } from "./core/git";
 import { confine, slugify, validProjectName } from "./core/paths";
+import { meadowOverlapMessage, overlapsMeadow } from "./core/self";
 import { parsePlan, type Plan } from "./planning/format";
 
 export type ProjectRow = { id: number; name: string; path: string; engine: string; description: string; screenshots: number; base_branch: string; created_at: string; updated_at: string };
@@ -41,6 +42,8 @@ export async function createProject(input: { name: string; engine?: string; desc
   const engine = input.engine ?? effectiveDefaultEngine();
   assertSelectableEngine(engine);
   const projectPath = input.path ? path.resolve(input.path) : confine(config.projectsDir, name);
+  const meadowRoot = overlapsMeadow(projectPath);
+  if (meadowRoot) throw new Error(meadowOverlapMessage(projectPath, meadowRoot));
   fs.mkdirSync(projectPath, { recursive: true });
   await ensureRepo(projectPath);
   fs.mkdirSync(path.join(projectPath, ".meadow"), { recursive: true });

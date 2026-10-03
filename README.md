@@ -14,7 +14,7 @@ The agent's own thinking (clarifying questions, specs, plans, summaries) uses th
 1. **Request.** You describe what you want. Meadow classifies it (new app, feature, bug, question), looks at the project, and asks up to five short questions.
 2. **Spec and plan.** It writes `SPEC.md` and a phased `PLAN.md`. Every phase has at least one check that can actually fail (`cmd`, `file_exists`, or `http`).
 3. **Approval.** Nothing touches code until you approve the plan.
-4. **Build.** Each phase runs on its own branch (`meadow/phase-<id>-<slug>`). The engine works, guards inspect the diff, checks run, and failures go back to the engine with the real error output — up to three attempts.
+4. **Build.** Each phase runs on its own branch (`meadow/phase-<id>-<slug>`). The engine works, guards inspect the diff, checks run, and failures go back to the engine with the real error output — up to three attempts. The engine (for example the Cursor CLI) does all of the coding, headless; the agent model only plans and summarises. When a run starts, Meadow opens the project in your editor (Cursor for the Cursor CLI) so you see files change, and a terminal window following the engine's live output (`~/.meadow/logs/live/<project>.log`). **Watch** on the Live console opens them again; **Settings → Watch runs** turns them off.
 5. **Receipts.** A passing phase is committed and fast-forwarded onto your main branch, with a summary, diff stats, check results and (for web projects) desktop and mobile screenshots. A stuck phase stops and tells you why; you can retry with a hint, skip, or roll back.
 
 ## Requirements

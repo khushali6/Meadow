@@ -5,6 +5,7 @@ import { bus, type EventType } from "../core/events";
 import { minimalEnv } from "../core/exec";
 import * as git from "../core/git";
 import { tail } from "../core/redact";
+import { meadowOverlapMessage, overlapsMeadow } from "../core/self";
 import type { Engine, EngineEvent } from "../engines/base";
 import { assertSelectableEngine, getEngine } from "../engines/registry";
 import { executionOrder, type Plan, type PlanPhase } from "../planning/format";
@@ -129,6 +130,8 @@ export class Harness {
     const project = getProject(projectId);
     const active = parsedActivePlan(projectId);
     if (!active) throw new Error("This project has no approved plan yet. Create or import a plan and approve it first.");
+    const meadowRoot = overlapsMeadow(project.path);
+    if (meadowRoot) throw new Error(meadowOverlapMessage(project.path, meadowRoot));
     const engineName = options.engine ?? project.engine;
     assertSelectableEngine(engineName);
     await assertEngineReady(engineName);

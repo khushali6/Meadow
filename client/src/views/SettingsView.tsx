@@ -270,6 +270,11 @@ export function SettingsView({ settings, overview, project, onNavigate }: { sett
 
       <McpSection project={project} />
 
+      <Section title="Watch runs" description="The coding engine works in the background. When a run starts, Meadow can open the project in your editor (files change as the engine edits them) and a terminal following its live output.">
+        <Row label="Open the project in the editor"><Toggle checked={config.watch.editor} onChange={value => patch({ watch: { editor: value } })} label="Open the project in the editor" /></Row>
+        <Row label="Open a live output terminal"><Toggle checked={config.watch.terminal} onChange={value => patch({ watch: { terminal: value } })} label="Open a live output terminal" /></Row>
+      </Section>
+
       <Section title="Screenshots" description="Captured only from the project's own localhost preview, desktop and mobile, after checks pass.">
         <Row label="Take screenshots"><Toggle checked={config.screenshots.enabled} onChange={value => patch({ screenshots: { enabled: value } })} label="Take screenshots" /></Row>
         {project ? <Row label={`Screenshots for ${project.name}`}><Toggle checked={Boolean(project.screenshots)} onChange={value => updateProject.mutate({ id: project.id, screenshots: value })} label="Project screenshots" /></Row> : null}

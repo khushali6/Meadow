@@ -20,6 +20,8 @@ import { PROVIDERS } from "./meadow/llm/catalog";
 import { healthCheck, llmRouting, providerFor, providerSummaries } from "./meadow/llm/router";
 import { assertSelectableEngine, engineInfo } from "./meadow/engines/registry";
 import { harness } from "./meadow/harness/runner";
+import { openWatchWindows } from "./meadow/harness/watch";
+import { overlapsMeadow } from "./meadow/core/self";
 import { handleAction, handleText } from "./meadow/intake/conversation";
 import { improvePlan } from "./meadow/intake/llm";
 import { parsePlan } from "./meadow/planning/format";
@@ -57,6 +59,7 @@ const configPatch = z.object({
   budget: z.object({ phaseTokens: z.number().int().min(1000), dailyTokens: z.number().int().min(1000), phaseWallClockS: z.number().int().min(60) }).partial().optional(),
   telegram: z.object({ mode: z.enum(["hosted", "own"]), relayUrl: z.string().max(300), notificationLevel: z.enum(["all", "phases", "failures"]), quietHours: z.object({ enabled: z.boolean(), start: z.number().int().min(0).max(23), end: z.number().int().min(0).max(23) }), voiceReplies: z.boolean() }).partial().optional(),
   screenshots: z.object({ enabled: z.boolean() }).partial().optional(),
+  watch: z.object({ editor: z.boolean(), terminal: z.boolean() }).partial().optional(),
   llm: z.object({
     provider: providerId,
     baseUrl: z.string().url(),
@@ -146,7 +149,7 @@ const setupRouter = router({
   state: publicProcedure.query(() => {
     const cwd = process.cwd();
     const profile = detectProject(cwd);
-    const suggestedPath = (profile.git.repo || profile.markers.length) && !cwd.startsWith(meadowHome()) ? cwd : null;
+    const suggestedPath = (profile.git.repo || profile.markers.length) && !cwd.startsWith(meadowHome()) && !overlapsMeadow(cwd) ? cwd : null;
     return { ...onboardingState(), order: ONBOARDING_STEPS, running: [...setupJobs], suggestedPath };
   }),
   step: publicProcedure.input(z.object({ id: z.enum(ONBOARDING_STEPS), status: z.enum(["pending", "running", "done", "skipped", "failed"]), detail: z.string().max(500).default("") })).mutation(({ input }) => markStep(input.id, input.status, input.detail)),
@@ -290,6 +293,12 @@ export const appRouter = router({
     return savePlanVersion(plan.project_id, await improvePlan(plan.raw_md), { source: "suggested" });
   }),
   planHistory: publicProcedure.input(z.object({ projectId: z.number() })).query(({ input }) => planHistory(input.projectId)),
+
+  watchProject: publicProcedure.input(z.object({ projectId: z.number() })).mutation(async ({ input }) => {
+    const opened = await openWatchWindows(input.projectId, { editor: true, terminal: true });
+    if (!opened.editor && !opened.terminal) throw new Error("Couldn't find Cursor, VS Code, Windsurf or a terminal app to open.");
+    return opened;
+  }),
 
   control: publicProcedure.input(z.object({ projectId: z.number(), action: z.enum(["start", "pause", "resume", "stop", "retry", "skip", "rollback"]), hint: z.string().max(4000).optional(), engine: z.string().optional() })).mutation(async ({ input }) => {
     switch (input.action) {

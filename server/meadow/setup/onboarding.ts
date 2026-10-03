@@ -6,6 +6,7 @@ import { ingestProject } from "../atlas/ingest";
 import { bus } from "../core/events";
 import { portableCheck } from "../core/checks";
 import { userPath } from "../core/paths";
+import { meadowOverlapMessage, overlapsMeadow } from "../core/self";
 import { getSetting, putSetting } from "../core/settings";
 import { currentSpace } from "../memory/embeddings";
 import { activePlan, createProject, getProject, latestPlan, listProjects, savePlanVersion, type ProjectRow } from "../projects";
@@ -53,6 +54,8 @@ export async function registerRepository(root: string): Promise<{ project: Proje
   if (!resolved) throw new SetupError("Use the full path to the repository.");
   if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) throw new SetupError(`${resolved} is not a folder.`);
   if (resolved === path.parse(resolved).root || resolved === os.homedir()) throw new SetupError("Pick a project folder, not your home or root directory.");
+  const meadowRoot = overlapsMeadow(resolved);
+  if (meadowRoot) throw new SetupError(meadowOverlapMessage(resolved, meadowRoot));
   const profile = detectProject(resolved);
   const existing = listProjects().find(project => path.resolve(project.path) === resolved);
   if (existing) return { project: existing, profile, created: false };

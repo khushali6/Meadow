@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { AlertTriangle, Bot, Camera, Check, CheckCircle2, CircleDot, Command, FileCode2, FileText, GitBranch, Pause, Play, RotateCcw, ShieldCheck, SkipForward, Square, Terminal, WandSparkles, XCircle } from "lucide-react";
+import { AlertTriangle, Bot, Camera, Check, CheckCircle2, CircleDot, Command, Eye, FileCode2, FileText, GitBranch, Pause, Play, RotateCcw, ShieldCheck, SkipForward, Square, Terminal, WandSparkles, XCircle } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { EmptyState, ErrorNote, PageHeader, StatusTag, clockTime, relativeTime } from "../components/common";
 import { MotionButton, Reveal, TabIndicator } from "../components/animation/motion";
@@ -42,6 +42,7 @@ export function RunView({ detail, onNavigate }: { detail: ProjectDetail; onNavig
   const { project, execution, phases, events } = detail;
   const utils = trpc.useUtils();
   const control = trpc.control.useMutation({ onSettled: () => utils.project.invalidate() });
+  const watch = trpc.watchProject.useMutation();
   const [filter, setFilter] = useState("All events");
   const [selectedPhaseId, setSelectedPhaseId] = useState<number | null>(null);
   const [expanded, setExpanded] = useState<number | null>(null);
@@ -83,6 +84,7 @@ export function RunView({ detail, onNavigate }: { detail: ProjectDetail; onNavig
         description="Every phase is measured by real checks, every change is on its own branch, and nothing runs outside this project folder."
         action={
           <div className="header-actions">
+            <MotionButton className="button secondary" onClick={() => watch.mutate({ projectId: project.id })} disabled={watch.isPending} title="Open the project in your editor and a terminal with the engine's live output"><Eye size={15} /> Watch</MotionButton>
             <MotionButton className="button secondary" onClick={() => setConfirmRollback(true)} disabled={control.isPending}><RotateCcw size={15} /> Roll back</MotionButton>
             {active ? (
               <>
@@ -95,7 +97,7 @@ export function RunView({ detail, onNavigate }: { detail: ProjectDetail; onNavig
           </div>
         }
       />
-      <ErrorNote error={control.error} />
+      <ErrorNote error={control.error ?? watch.error} />
       <Reveal show={confirmRollback} className="banner warn" role="alertdialog">
           <AlertTriangle size={16} />
           <div><strong>Roll back to the last passing phase?</strong><span>The current phase branch is kept under failed/ for inspection; the working tree resets to the main branch.</span></div>
