@@ -55,6 +55,11 @@ export function RunView({ detail, onNavigate }: { detail: ProjectDetail; onNavig
   const selectedPhase = phases.find(phase => phase.id === selectedPhaseId) ?? current ?? phases[phases.length - 1];
   const filtered = useMemo(() => events.filter(FILTERS[filter]), [events, filter]);
   const passedCount = phases.filter(phase => phase.status === "passed").length;
+  const finalShots = useMemo(() => {
+    const finals = events.filter(event => event.type === "screenshot" && event.payload?.final && event.payload?.screenshotId);
+    const lastRun = finals[finals.length - 1]?.executionId;
+    return finals.filter(event => event.executionId === lastRun);
+  }, [events]);
   const progress = phases.length ? Math.round((passedCount / phases.length) * 100) : 0;
   const active = Boolean(execution?.active);
   const status = active ? "running" : execution?.status ?? (detail.approvedPlanId ? "ready" : "draft");
@@ -98,6 +103,19 @@ export function RunView({ detail, onNavigate }: { detail: ProjectDetail; onNavig
         }
       />
       <ErrorNote error={control.error ?? watch.error} />
+      {finalShots.length ? (
+        <section className="panel">
+          <div className="panel-heading"><div><span className="panel-kicker">Finished app</span><h2>Started after the last phase and opened in a headless browser</h2></div></div>
+          <div className="inspector-body shot-grid">
+            {finalShots.map(event => (
+              <a className="shot-card" key={event.id} href={screenshotUrl(Number(event.payload?.screenshotId))} target="_blank" rel="noreferrer">
+                <img src={screenshotUrl(Number(event.payload?.screenshotId))} alt={event.title} loading="lazy" />
+                <div className="shot-caption"><div><strong>{event.title.replace(/^Final screenshot /, "")}</strong><span>{relativeTime(event.ts)}</span></div></div>
+              </a>
+            ))}
+          </div>
+        </section>
+      ) : null}
       <Reveal show={confirmRollback} className="banner warn" role="alertdialog">
           <AlertTriangle size={16} />
           <div><strong>Roll back to the last passing phase?</strong><span>The current phase branch is kept under failed/ for inspection; the working tree resets to the main branch.</span></div>

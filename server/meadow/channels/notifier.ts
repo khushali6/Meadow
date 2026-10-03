@@ -22,6 +22,7 @@ const PROGRESS_TYPES = new Set(["phase_started", "session_started", "thinking", 
 export function wantsEvent(event: MeadowEvent): boolean {
   const level = loadConfig().telegram.notificationLevel;
   if (["approval_requested", "phase_blocked"].includes(event.type)) return true;
+  if (event.type === "plan_ready" && event.payload?.status === "draft") return true;
   if (event.type === "execution_finished") return level !== "failures" || event.payload?.status !== "completed";
   if (level === "failures") return event.type === "error" && Boolean(event.executionId) && event.runId === null;
   if (level === "phases") return ["phase_started", "phase_passed", "plan_ready", "execution_started"].includes(event.type) || (event.type === "control" && ["paused", "waiting"].includes(String(event.payload?.status)));
@@ -46,7 +47,7 @@ export function formatEvent(event: MeadowEvent): Outgoing | null {
         "",
         event.detail.slice(0, 1200),
       ].join("\n");
-      const photos = ((p.screenshotIds as number[] | undefined) ?? []).map(id => getDb().get<{ path: string; label: string }>("SELECT path, label FROM screenshots WHERE id = ?", id)).filter(Boolean).map(row => ({ path: row!.path, caption: `${event.title.split(":").pop()?.trim()} · ${row!.label}` }));
+      const photos = photosFor(p.screenshotIds, event.title.split(":").pop()?.trim() ?? "");
       const gate = loadConfig().harness.phaseGate === "ask";
       return { text, photos, urgent: false, buttons: [[...(gate ? [{ text: "Continue", callback_data: `continue:${pid}` }] : []), { text: "Retry", callback_data: `retry:${pid}` }, { text: "Pause", callback_data: `pause:${pid}` }, { text: "Add feature", callback_data: `addfeature:${pid}` }]] };
     }
@@ -65,12 +66,32 @@ export function formatEvent(event: MeadowEvent): Outgoing | null {
     }
     case "execution_finished": {
       const status = p.status as string;
-      if (status === "completed") return { text: `🎉 ${event.title}${pid ? ` for ${safeName(pid)}` : ""}. Every phase passed its checks. The code is on the main branch of the project folder.`, urgent: true, buttons: [[{ text: "Add feature", callback_data: `addfeature:${pid}` }]] };
+      if (status === "completed") {
+        const photos = photosFor(p.screenshotIds, "Finished app");
+        const folder = projectPath(pid);
+        const lines = [
+          `🎉 ${event.title}${pid ? ` for ${safeName(pid)}` : ""}. Every phase passed its checks. The code is on the main branch of ${folder ?? "the project folder"}.`,
+          p.runHow ? `\nRun it yourself:\n${folder ? `cd ${folder}\n` : ""}${p.runHow}` : "",
+          photos.length ? `\nScreenshots of the running app (desktop and mobile) follow.` : "",
+          event.detail ? `\n${event.detail}` : "",
+        ];
+        return { text: lines.filter(Boolean).join("\n"), photos, urgent: true, buttons: [[{ text: "Add feature", callback_data: `addfeature:${pid}` }, { text: "Screenshot again", callback_data: `shot:${pid}` }]] };
+      }
       if (status === "failed") return { text: `Run failed: ${event.detail}`, urgent: true };
       return null;
     }
-    case "plan_ready":
+    case "plan_ready": {
+      const planId = p.planId as number | undefined;
+      if (p.status === "draft" && planId) {
+        if (p.channel === "telegram") return null;
+        return {
+          text: `📝 ${event.title}${pid ? ` for ${safeName(pid)}` : ""}\n\n${event.detail.slice(0, 3000)}\n\nNothing runs until you approve.`,
+          urgent: true,
+          buttons: [[{ text: "Approve and start", callback_data: `approve:${planId}` }], [{ text: "Edit", callback_data: `edit:${planId}` }, { text: "Improve checks", callback_data: `improve:${planId}` }]],
+        };
+      }
       return { text: `${event.title} (${event.detail}).`, urgent: false };
+    }
     case "execution_started":
       return { text: `🚀 ${event.title}${pid ? ` for ${safeName(pid)}` : ""}\n${event.detail}\n\nI'll post a live progress card for each phase and message you when checks pass, fail or need a decision.`, urgent: false, buttons: [[{ text: "Pause", callback_data: `pause:${pid}` }, { text: "Stop", callback_data: `stop:${pid}` }]] };
     case "phase_started":
@@ -88,6 +109,21 @@ export function formatEvent(event: MeadowEvent): Outgoing | null {
       return event.runId === null && event.executionId ? { text: `⚠️ ${event.title}\n${event.detail.slice(0, 800)}`, urgent: false, silent: true } : null;
     default:
       return null;
+  }
+}
+
+function photosFor(ids: unknown, caption: string): Array<{ path: string; caption: string }> {
+  return ((ids as number[] | undefined) ?? [])
+    .map(id => getDb().get<{ path: string; label: string }>("SELECT path, label FROM screenshots WHERE id = ?", id))
+    .filter((row): row is { path: string; label: string } => Boolean(row))
+    .map(row => ({ path: row.path, caption: `${caption} · ${row.label}` }));
+}
+
+function projectPath(projectId: number): string | null {
+  try {
+    return getProject(projectId).path;
+  } catch {
+    return null;
   }
 }
 

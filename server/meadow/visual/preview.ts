@@ -5,7 +5,9 @@ import { isLocalUrl, type Preview } from "../planning/format";
 const active = new Set<ChildProcess>();
 
 export class PreviewHandle {
-  constructor(readonly url: string, private child: ChildProcess | null, readonly log: () => string) {}
+  constructor(readonly url: string, private child: ChildProcess | null, readonly log: () => string, private onStop: (() => void) | null = null) {
+    if (child) active.add(child);
+  }
 
   stop() {
     if (this.child) {
@@ -13,6 +15,8 @@ export class PreviewHandle {
       active.delete(this.child);
       this.child = null;
     }
+    this.onStop?.();
+    this.onStop = null;
   }
 }
 

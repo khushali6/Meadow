@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { loadConfig } from "./config";
@@ -124,8 +125,14 @@ export function savePlanVersion(projectId: number, rawMd: string, options: { spe
     created_at: now(),
   });
   touchProject(projectId);
-  return getPlan(id);
+  const plan = getPlan(id);
+  const summary = [result.plan.goal, "", ...result.plan.phases.map((phase, i) => `${i + 1}. ${phase.name} (${phase.checks.length} check${phase.checks.length === 1 ? "" : "s"})`)].join("\n");
+  bus.emitEvent({ type: "plan_ready", projectId, title: `Plan v${plan.version} is ready for review`, detail: summary, payload: { planId: plan.id, status: "draft", source: plan.source, channel: planOrigin.getStore()?.channel ?? null } });
+  return plan;
 }
+
+/** Which conversation channel is saving a plan, so a Telegram chat that already shows the review isn't sent a second one. */
+export const planOrigin = new AsyncLocalStorage<{ channel: string }>();
 
 export function phasesFor(planId: number): PhaseRow[] {
   return getDb().all<PhaseRow>("SELECT * FROM phases WHERE plan_id = ? ORDER BY idx", planId);

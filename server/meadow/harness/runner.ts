@@ -12,6 +12,7 @@ import { executionOrder, type Plan, type PlanPhase } from "../planning/format";
 import { getProject, parsedActivePlan, phasesFor, projectRules, touchProject, type PhaseRow, type ProjectRow } from "../projects";
 import { indexMemory, indexProject, promptContext } from "../rag/index";
 import { captureRoutes } from "../visual/capture";
+import { detectLaunch, launchApp } from "../visual/launch";
 import { startPreview, type PreviewHandle } from "../visual/preview";
 import { projectBrief } from "../brief/brief";
 import { projectStatus } from "../brief/next";
@@ -220,12 +221,12 @@ export class Harness {
     return bus.emitEvent({ type, title, detail, projectId: state.projectId, executionId: state.executionId, runId: extra.runId ?? null, phaseId: extra.phaseId ?? null, payload: extra.payload });
   }
 
-  private finish(state: Active, status: ExecutionStatus, note: string | null) {
+  private finish(state: Active, status: ExecutionStatus, note: string | null, extra: Record<string, unknown> = {}) {
     const terminal = ["completed", "stopped", "failed"].includes(status);
     getDb().update("executions", state.executionId, { status, note, finished_at: terminal ? now() : null });
     this.active.delete(state.projectId);
     touchProject(state.projectId);
-    this.emit(state, "execution_finished", status === "completed" ? "All phases passed" : `Run ${status}`, note ?? "", { payload: { status } });
+    this.emit(state, "execution_finished", status === "completed" ? "All phases passed" : `Run ${status}`, note ?? "", { payload: { ...extra, status } });
   }
 
   /** Sleeps in short steps so pause and stop take effect during a rate-limit wait. Returns false when interrupted. */
@@ -263,7 +264,33 @@ export class Harness {
         return this.park(state, null, "waiting", "Phase passed. Waiting for you to continue.");
       }
     }
-    this.finish(state, "completed", nextRecommendation(project.id));
+    const showcase = await this.showcase(state, project, plan);
+    this.finish(state, "completed", nextRecommendation(project.id), showcase);
+  }
+
+  /** The finished app, running, as a person would see it: desktop and mobile screenshots plus how to run it. */
+  private async showcase(state: Active, project: ProjectRow, plan: Plan): Promise<Record<string, unknown>> {
+    const config = loadConfig();
+    if (!project.screenshots || !config.screenshots.enabled) return { screenshotIds: [], runHow: null };
+    let handle: PreviewHandle | null = null;
+    try {
+      const spec = await detectLaunch(project.path, plan);
+      if (!spec) {
+        this.emit(state, "message", "No web page to screenshot", "This project has no preview block, dev script, Python web app or index.html, so there is nothing to open in a browser.");
+        return { screenshotIds: [], runHow: null };
+      }
+      this.emit(state, "message", "Opening the finished app in a browser", spec.how);
+      handle = await launchApp(spec, project.path, detail => this.emit(state, "message", detail, ""));
+      const { shots, skipped } = await captureRoutes({ baseUrl: handle.url, routes: spec.routes, projectPath: project.path, projectId: project.id, phaseId: null, folder: `final-${state.executionId}` });
+      for (const shot of shots) this.emit(state, "screenshot", `Final screenshot ${shot.label}`, shot.path, { payload: { screenshotId: shot.id, route: shot.route, viewport: shot.viewport, final: true } });
+      for (const reason of skipped) this.emit(state, "message", "Screenshot skipped", reason);
+      return { screenshotIds: shots.map(shot => shot.id), runHow: spec.how, url: handle.url };
+    } catch (error) {
+      this.emit(state, "error", "Couldn't open the finished app for screenshots", (error as Error).message.slice(0, 1500));
+      return { screenshotIds: [], runHow: null };
+    } finally {
+      handle?.stop();
+    }
   }
 
   private park(state: Active, phase: PhaseRow | null, status: "paused" | "waiting" | "blocked", note: string) {

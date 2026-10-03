@@ -8,7 +8,7 @@ import { redact } from "../core/redact";
 import { engineInfo, selectableEngines } from "../engines/registry";
 import { harness } from "../harness/runner";
 import { formatErrors, parsePlan } from "../planning/format";
-import { addNote, approvePlan, createProject, findProject, getPlan, getProject, latestPlan, listProjects, savePlanVersion, updateProject } from "../projects";
+import { addNote, approvePlan, createProject, findProject, getPlan, getProject, latestPlan, listProjects, planOrigin, savePlanVersion, updateProject } from "../projects";
 import { indexMemory, indexProject, search } from "../rag/index";
 import { planSummaryText, projectDetail, statusText, usageToday } from "../service";
 import { contextSummary, gatherContext } from "./context";
@@ -184,7 +184,7 @@ export async function control(state: ConversationState, verb: string, projectId:
 export async function handleText(channel: string, chatId: string, text: string): Promise<Reply> {
   const state = loadState(channel, chatId);
   try {
-    const reply = await routeText(state, text.trim());
+    const reply = await planOrigin.run({ channel }, () => routeText(state, text.trim()));
     saveState(channel, chatId, state);
     if (reply.investigate && channel !== "telegram") return await chatInvestigate(reply.investigate.projectId, reply.investigate.question, "ui");
     return reply;
@@ -417,7 +417,7 @@ async function command(state: ConversationState, text: string): Promise<Reply> {
 export async function handleAction(channel: string, chatId: string, action: string, actor: string): Promise<Reply> {
   const state = loadState(channel, chatId);
   try {
-    const reply = await routeAction(state, action, actor);
+    const reply = await planOrigin.run({ channel }, () => routeAction(state, action, actor));
     saveState(channel, chatId, state);
     return reply;
   } catch (error) {
@@ -448,6 +448,8 @@ async function routeAction(state: ConversationState, action: string, actor: stri
       return routeIntent(state, a as Intent, state.request, null);
     case "approve": {
       const plan = getPlan(id);
+      if (plan.status === "approved") return { text: `Plan v${plan.version} is already approved. Use /status to see the run.` };
+      if (plan.status === "superseded" || latestPlan(plan.project_id)?.id !== plan.id) return { text: `Plan v${plan.version} has a newer version. Review the latest one in the dashboard or with /plan.` };
       await approvePlan(plan.id);
       state.stage = "idle";
       state.activeProjectId = plan.project_id;
@@ -477,6 +479,9 @@ async function routeAction(state: ConversationState, action: string, actor: stri
       state.stage = "awaiting_hint";
       state.hintProjectId = id;
       return { text: "What should the agent do differently? Send the hint as a message." };
+    case "shot":
+      state.activeProjectId = id;
+      return { text: "Starting the app and taking screenshots…", shot: { projectId: id, route: null } };
     case "addfeature":
       state.activeProjectId = id;
       state.stage = "awaiting_feature";

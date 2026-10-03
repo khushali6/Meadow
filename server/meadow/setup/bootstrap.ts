@@ -5,6 +5,7 @@ import { getSecret, homePath, saveConfig, SECRET_NAMES, setSecret, storedSecret,
 import { capture, findBinary, isWindows } from "../core/exec";
 import { getDb } from "../core/db";
 import { PROVIDERS } from "../llm/catalog";
+import { screenshotStatus } from "../visual/capture";
 import { engineJob, connectEngine, installEngine, saveEngineKey, scanEngines, selectEngine, type EngineOption } from "./engines";
 import { markStep } from "./onboarding";
 import { saveProviderKey, scanProviders, useProvider } from "./providers";
@@ -379,5 +380,7 @@ export async function runSetup(io: SetupIO, options: SetupOptions = {}) {
   line("Agent model", results.model, "Runtime settings → Agent model");
   line("Coding engine", results.engine, "Setup → Coding engine");
   line("Telegram", results.telegram, "Runtime settings → Telegram");
+  const shots = await screenshotStatus();
+  io.log(`  ${shots.ok ? "✓" : "·"} Screenshots of finished apps${shots.ok ? ` (${shots.backend === "playwright" ? "Playwright" : "your installed browser, headless"})` : ` · optional: ${shots.detail}`}`);
   return results;
 }

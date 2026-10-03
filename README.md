@@ -16,6 +16,9 @@ The agent's own thinking (clarifying questions, specs, plans, summaries) uses th
 3. **Approval.** Nothing touches code until you approve the plan.
 4. **Build.** Each phase runs on its own branch (`meadow/phase-<id>-<slug>`). The engine works, guards inspect the diff, checks run, and failures go back to the engine with the real error output — up to three attempts. The engine (for example the Cursor CLI) does all of the coding, headless; the agent model only plans and summarises. When a run starts, Meadow opens the project in your editor (Cursor for the Cursor CLI) so you see files change, and a terminal window following the engine's live output (`~/.meadow/logs/live/<project>.log`). **Watch** on the Live console opens them again; **Settings → Watch runs** turns them off.
 5. **Receipts.** A passing phase is committed and fast-forwarded onto your main branch, with a summary, diff stats, check results and (for web projects) desktop and mobile screenshots. A stuck phase stops and tells you why; you can retry with a hint, skip, or roll back.
+6. **The finished app.** When every phase has passed, Meadow starts the app and screenshots it in a headless browser (desktop and mobile). It uses the plan's `preview` block, or works out how to run the project: the `dev`/`start` script with the project's package manager, Django, FastAPI, Flask, Streamlit, Rails, PHP, or a built `index.html`. The screenshots and a "run it yourself" command go to Telegram and the Live console; **Screenshot again** in Telegram (or `/shot`) repeats it later. The browser runs with a throwaway profile and can only reach the app on localhost.
+
+Every new plan, whether it came from the dashboard, setup, CodeAtlas or a request, is also sent to Telegram for review with **Approve and start**, **Edit** and **Improve checks** buttons. Plans are written for the tools this machine has (Node, pnpm, Python, Go…), so their checks can actually run here.
 
 ## Requirements
 
@@ -29,7 +32,8 @@ The agent's own thinking (clarifying questions, specs, plans, summaries) uses th
   - Codex CLI (`codex`): Install and Connect from Setup, or an OpenAI API key
   - Gemini CLI (`gemini`): Install from Setup, then sign in once by running `gemini`, or paste a `GEMINI_API_KEY`
   - Anything else (aider, opencode, a script) through the custom engine: set `engine.custom.command` in `~/.meadow/config.json`. It receives the prompt as `$MEADOW_PROMPT` and `$MEADOW_PROMPT_FILE` (`%MEADOW_PROMPT_FILE%` on Windows, where the command runs in `cmd.exe`), runs in the project folder, and its exit code decides success.
-- Optional: Playwright + Chromium for screenshots, a Telegram bot token, `piper` + `ffmpeg` for spoken replies, `whisper.cpp` + `ffmpeg` for local voice transcription
+- For screenshots: any Chromium-based browser already installed (Chrome, Edge, Chromium, Brave; or Playwright's Chromium). Set `MEADOW_BROWSER` to use a specific one.
+- Optional: a Telegram bot token, `piper` + `ffmpeg` for spoken replies, `whisper.cpp` + `ffmpeg` for local voice transcription
 
 ## Quick start
 

@@ -1,6 +1,7 @@
 import { redact } from "../core/redact";
 import { chatJson, getLlm, type ChatMessage } from "../llm/client";
 import { formatErrors, parsePlan, type Plan } from "../planning/format";
+import { machineSummary } from "../setup/toolbox";
 
 export const INTENTS = ["new_project", "add_feature", "fix_bug", "question", "status", "control", "plan_file"] as const;
 export type Intent = (typeof INTENTS)[number];
@@ -115,6 +116,7 @@ const PLAN_RULES = `Rules:
 - Checks run non-interactively with CI=1: never use watch modes or commands that wait for input; dev servers are started by Meadow from the preview block, not in checks.
 - The first phase must install dependencies as part of a check (e.g. "npm install && npm run build") because the repo starts empty.
 - Use only free, local tools and services.
+- Checks and the preview command may only use tools listed under "Tools installed"; pick the stack and package manager from those. If the project already has a lockfile, use its package manager.
 - depends_on must reference earlier phase ids and form no cycles.
 - preview.url must be http://localhost:<port>.`;
 
@@ -136,7 +138,7 @@ async function planLoop(messages: ChatMessage[], accept: (plan: Plan, raw: strin
 export async function generatePlan(input: { spec: string; projectName: string; context: string }): Promise<string> {
   return planLoop([
     { role: "system", content: `You are Meadow's planner. Turn a SPEC.md into a PLAN.md that a coding agent will execute phase by phase. Format example:\n\n${PLAN_FORMAT}\n\n${PLAN_RULES}` },
-    { role: "user", content: redact(`project: ${input.projectName}\n\nSPEC.md:\n${input.spec}\n\nProject context:\n${input.context.slice(0, 4000)}`) },
+    { role: "user", content: redact(`project: ${input.projectName}\n\n${await machineSummary()}\n\nSPEC.md:\n${input.spec}\n\nProject context:\n${input.context.slice(0, 4000)}`) },
   ], plan => (plan.project !== input.projectName ? `project must be "${input.projectName}"` : null));
 }
 
@@ -149,7 +151,7 @@ export async function appendPhases(input: { existingPlan: string; request: strin
     { role: "system", content: `You are Meadow's planner. Extend an existing PLAN.md with 1-2 NEW phases appended at the end for the request. Keep every existing phase exactly as it is (same id, name, tasks, checks). New phase ids must be new.
 ${input.kind === "fix_bug" ? "This is a bug fix: the first task of the first new phase must be \"Reproduce the bug with a failing automated test\", and that phase's checks must run that test (it must pass once fixed)." : ""}
 Format example:\n\n${PLAN_FORMAT}\n\n${PLAN_RULES}` },
-    { role: "user", content: redact(`Request:\n${input.request}\n\nCurrent PLAN.md:\n${input.existingPlan}\n\n${input.spec ? `SPEC.md:\n${input.spec.slice(0, 3000)}\n\n` : ""}Project context:\n${input.context.slice(0, 4000)}`) },
+    { role: "user", content: redact(`Request:\n${input.request}\n\n${await machineSummary()}\n\nCurrent PLAN.md:\n${input.existingPlan}\n\n${input.spec ? `SPEC.md:\n${input.spec.slice(0, 3000)}\n\n` : ""}Project context:\n${input.context.slice(0, 4000)}`) },
   ], plan => {
     const ids = plan.phases.map(phase => `${phase.id}:${phase.name}`);
     const missing = keep.filter(item => !ids.includes(item));
@@ -163,7 +165,7 @@ Format example:\n\n${PLAN_FORMAT}\n\n${PLAN_RULES}` },
 export async function improvePlan(raw: string): Promise<string> {
   return planLoop([
     { role: "system", content: `Improve the checks of a user's PLAN.md: add missing build/test checks where a phase only checks file existence or has weak checks. Do not change goals, phase names, ids, tasks or order. ${PLAN_RULES}` },
-    { role: "user", content: raw },
+    { role: "user", content: `${await machineSummary()}\n\n${raw}` },
   ], () => null);
 }
 

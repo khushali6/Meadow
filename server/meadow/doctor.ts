@@ -84,7 +84,7 @@ export async function systemChecks(): Promise<SystemCheck[]> {
   const whisper = await localWhisper();
   checks.push({ name: "Voice transcription", ok: routing.voice.available || Boolean(whisper), optional: true, detail: routing.voice.available ? `Via ${routing.voice.name}${whisper ? " (whisper.cpp fallback ready)" : ""}` : whisper ? "On this machine via whisper.cpp" : routing.voice.reason, fix: "Pick a provider with transcription, or install whisper.cpp + ffmpeg and set MEADOW_WHISPER_MODEL." });
   const pw = await playwrightStatus();
-  checks.push({ name: "Screenshots (Playwright)", ok: pw.ok, optional: true, detail: pw.detail });
+  checks.push({ name: "Screenshots", ok: pw.ok, optional: true, detail: pw.detail });
   {
     const hosted = loadConfig().telegram.mode === "hosted" && Boolean(getSecret("TELEGRAM_RELAY_TOKEN"));
     const own = Boolean(getSecret("TELEGRAM_BOT_TOKEN"));

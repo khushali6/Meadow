@@ -112,8 +112,38 @@ describe("telegram progress feed during a real harness run", () => {
     const engine = new FakeEngine();
     engine.setScript(defaultFakeScript);
     await runPlan(engine);
-    expect(calls).toEqual([]);
+    const reviews = calls.filter(call => JSON.stringify(call).includes("Approve and start"));
+    expect(reviews).toHaveLength(1);
+    expect(calls.filter(call => !reviews.includes(call))).toEqual([]);
   }, 30_000);
+});
+
+describe("finished app showcase", async () => {
+  const browser = await (await import("../../server/meadow/visual/browser")).findBrowser();
+  it.skipIf(!browser)("starts the finished app, screenshots it and sends the photos with the completion report", async () => {
+    saveConfig({ telegram: { notificationLevel: "phases" } });
+    const photos: Array<{ path: string; caption: string }> = [];
+    const { calls, target } = fakeTarget();
+    target.api.sendPhotos = async (_chat: number, items: Array<{ path: string; caption: string }>) => void photos.push(...items);
+    notifier = new Notifier(target);
+    notifier.start();
+    const engine = new FakeEngine();
+    engine.setScript(defaultFakeScript);
+    setEngine(engine);
+    const project = await createProject({ name: "web-app", engine: "fake" });
+    const fs = await import("node:fs");
+    fs.writeFileSync(`${project.path}/index.html`, "<h1>Split the bill</h1>");
+    await approvePlan(savePlanVersion(project.id, THREE_PHASE_PLAN).id);
+    const done = settled(project.id);
+    await harness.start(project.id);
+    expect((await done).payload?.status).toBe("completed");
+    await new Promise(resolve => setTimeout(resolve, 200));
+    const report = calls.find(call => call.text.startsWith("🎉"));
+    expect(report?.text).toContain("Run it yourself");
+    expect(report?.text).toContain("Screenshots of the running app");
+    expect(photos.map(photo => photo.caption)).toEqual(["Finished app · / · desktop", "Finished app · / · mobile"]);
+    for (const photo of photos) expect(fs.statSync(photo.path).size).toBeGreaterThan(1000);
+  }, 120_000);
 });
 
 describe("progress card rendering", () => {
