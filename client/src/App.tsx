@@ -31,14 +31,14 @@ const MetricsView = lazy(() => import("./views/MetricsView").then(module => ({ d
 const SystemMapView = lazy(() => import("./views/SystemMapView").then(module => ({ default: module.SystemMapView })));
 
 const NAV = [
-  { key: "/", label: "Live console", icon: Activity },
-  { key: "/request", label: "New request", icon: MessageSquarePlus },
-  { key: "/projects", label: "Workspaces", icon: Boxes },
+  { key: "/", label: "Live run", icon: Activity },
+  { key: "/request", label: "New project", icon: MessageSquarePlus },
+  { key: "/projects", label: "Projects", icon: Boxes },
   { key: "/plans", label: "Execution plan", icon: FileText },
-  { key: "/approvals", label: "Policy gates", icon: ShieldCheck, badge: true },
+  { key: "/approvals", label: "Approvals", icon: ShieldCheck, badge: true },
   { key: "/memory", label: "Context index", icon: BookOpen },
   { key: "/atlas", label: "CodeAtlas", icon: Radar },
-  { key: "/map", label: "System map", icon: Network },
+  { key: "/map", label: "Architecture", icon: Network },
   { key: "/metrics", label: "Observability", icon: Gauge },
 ] as const;
 
@@ -203,7 +203,7 @@ function Dashboard() {
       <aside className={`sidebar ${mobileNav ? "sidebar-open" : ""}`}>
         <div className="brand-lockup" onClick={() => go("/")} role="button" tabIndex={0} onKeyDown={event => event.key === "Enter" && go("/")}>
           <div className="brand-mark"><Leaf size={17} strokeWidth={2.4} /></div>
-          <div><div className="brand-name">meadow</div><div className="brand-tagline">local-first agent</div></div>
+          <div><div className="brand-name">Meadow</div><div className="brand-tagline">AI engineering agent</div></div>
         </div>
         <div className="switcher-wrap">
           <button className="workspace-switcher" onClick={() => setSwitcher(!switcher)} aria-expanded={switcher} disabled={!projects.length}>

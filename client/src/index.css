@@ -2,21 +2,53 @@
 @import "tw-animate-css";
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * ── MEADOW DESIGN SYSTEM ────────────────────────────────────────────────────
+ * Editorial · Technical · Minimal · Amber-on-Ivory
+ * Typography: Inter (UI) + JetBrains Mono (code/metadata)
+ * Color: ~90% neutral  |  8% warm secondary  |  2-4% amber accent
+ * Motion: GSAP (page) · Anime.js (technical) · Motion (React UI)
+ * ────────────────────────────────────────────────────────────────────────────
+ */
 :root {
-  --forest: #2d3a2e;
-  --moss: #3d5a3e;
-  --cream: #faf8f5;
+  /* Surfaces */
+  --cream: #faf8f3;
+  --light: #f2efe8;
   --paper: #fffdf9;
-  --light: #f5f3ef;
-  --sage: #a8b89a;
-  --sun: #e8c872;
-  --error: #b3472f;
-  --ink: #2d342e;
-  --muted: #7d857d;
-  --line: #e5e5dd;
-  --line-strong: #d7d9ce;
-  --radius: 12px;
-  --sidebar-width: 240px;
+
+  /* Text */
+  --ink:   #151515;
+  --muted: #5e5a53;
+
+  /* Borders */
+  --line:        #d8d3c9;
+  --line-strong: #bdb6aa;
+
+  /* Accent — amber; reserved for active/executing/selected state only */
+  --sun:      #d97706;
+  --sun-2:    #f59e0b;
+  --sun-soft: #fff4dc;
+
+  /* Semantic */
+  --success: #3f7d4a;
+  --warning: #b7791f;
+  --error:   #b94a48;
+
+  /* Typography stacks */
+  --sans: "Inter Variable", Inter, ui-sans-serif, system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Motion */
+  --ease-ui: cubic-bezier(.22, 1, .36, 1);
+
+  /* Layout */
+  --radius: 0px;
+  --sidebar-width: 226px;
+
+  /* Legacy aliases (kept for compatibility with overrides below) */
+  --forest: var(--ink);
+  --moss:   var(--ink);
+  --sage:   var(--line-strong);
 }
 
 * { box-sizing: border-box; }
@@ -149,23 +181,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .dark .topbar { background: rgba(30,39,32,.85); }.dark .page-header h1, .dark .panel-heading h2, .dark .project-name, .dark .metric-card strong, .dark .memory-card h3, .dark .dialog h2 { color: #eff5ed; }.dark .panel, .dark .project-card, .dark .new-project-card, .dark .metric-card, .dark .memory-card, .dark .approval-card, .dark .dialog { background: var(--paper); }.dark .phase-item:hover, .dark .phase-item.current, .dark .event-row:hover, .dark .event-row.selected { background: #303b31; }.dark .shot-window, .dark .search-field, .dark .add-note-form input, .dark .add-note-form textarea, .dark .dialog input, .dark .dialog textarea, .dark .dialog select, .dark .setting-control select, .dark .number-input input { background: #1f2a21; color: var(--ink); }.dark .topbar { border-color: var(--line); }.dark .button.secondary, .dark .icon-button:hover { background: var(--light); color: var(--ink); border-color: var(--line-strong); }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; scroll-behavior: auto !important; } }
 
-/* Remote Agent reference layer: premium AI infrastructure, editorial and technical. */
-:root {
-  --forest: #111311;
-  --moss: #111311;
-  --cream: #faf8f3;
-  --paper: #fffdf9;
-  --light: #f2efe8;
-  --sage: #bdb6aa;
-  --sun: #d97706;
-  --error: #b94a48;
-  --ink: #151515;
-  --muted: #5e5a53;
-  --line: #d8d3c9;
-  --line-strong: #bdb6aa;
-  --radius: 0px;
-  --sidebar-width: 226px;
-}
 body { background: var(--cream); color: var(--ink); font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
 .app-shell { background: var(--cream); }
 .sidebar { background: #151515; border-right: 1px solid #151515; padding: 24px 16px 15px; }
@@ -498,17 +513,6 @@ body { background: var(--cream); color: var(--ink); font-family: Inter, ui-sans-
 .dark .status-tag.running, .dark .status-tag.paused, .dark .countdown { color: #f59e0b; }
 .dark .filter-tabs button.selected, .dark .inspector-tabs button.selected { background: var(--sun); color: #151515; }
 
-/* Interface skill layer: editorial, technical, amber reserved for live/selected state. */
-:root {
-  --cream: #faf8f3; --light: #f2efe8; --paper: #fffdf9;
-  --ink: #151515; --muted: #5e5a53;
-  --line: #d8d3c9; --line-strong: #bdb6aa;
-  --sun: #d97706; --sun-2: #f59e0b; --sun-soft: #fff4dc;
-  --success: #3f7d4a; --warning: #b7791f; --error: #b94a48;
-  --sans: "Inter Variable", Inter, ui-sans-serif, system-ui, sans-serif;
-  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  --ease-ui: cubic-bezier(.22,1,.36,1);
-}
 body, .dialog h2, .page-header h1, .brand-name { font-family: var(--sans); }
 body { font-size: 16px; -webkit-font-smoothing: antialiased; font-feature-settings: "cv11", "ss01"; }
 code, pre, kbd, .plan-editor, .code-block, .event-detail pre { font-family: var(--mono); }

@@ -1,0 +1,64 @@
+version: "3.9"
+
+# ── Meadow — Docker Compose ─────────────────────────────────────────────────
+# For production or team use. Individual developers should run Meadow locally
+# with ./startup.sh instead.
+#
+# Usage:
+#   # 1. Copy secrets template
+#   cp .env.example .env.meadow
+#   # 2. Fill in your API keys in .env.meadow
+#   # 3. Start
+#   docker compose up -d
+#   # 4. Open http://localhost:56000
+
+services:
+  meadow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/your-org/meadow:latest    # replace with your registry
+    container_name: meadow
+    restart: unless-stopped
+    ports:
+      - "56000:56000"
+    env_file:
+      - .env.meadow                           # never commit this file
+    environment:
+      MEADOW_HOST: "0.0.0.0"
+      MEADOW_PORT: "56000"
+      MEADOW_PROJECTS_DIR: /home/meadow/projects
+    volumes:
+      # Persistent Meadow data (DB, session token, screenshots, cached repos)
+      - meadow_data:/home/meadow/.meadow
+      # Project code — mount the directory where Meadow creates project folders
+      - meadow_projects:/home/meadow/projects
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:56000/api/trpc/overview',r=>process.exit(r.statusCode===200?0:1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ── Optional: Caddy reverse proxy for HTTPS access ──────────────────────────
+  # Uncomment if you want to expose Meadow over HTTPS on a domain.
+  # caddy:
+  #   image: caddy:2-alpine
+  #   restart: unless-stopped
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./Caddyfile:/etc/caddy/Caddyfile:ro
+  #     - caddy_data:/data
+  #   depends_on:
+  #     meadow:
+  #       condition: service_healthy
+
+volumes:
+  meadow_data:
+    driver: local
+  meadow_projects:
+    driver: local
+  # caddy_data:
+  #   driver: local

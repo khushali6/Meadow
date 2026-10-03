@@ -173,6 +173,39 @@ function designHeading(plan: Plan, projectPath: string): string {
   return brief ? `\n# Design standard (required for every screen you touch)\n${brief}` : "";
 }
 
+/** Language/stack-specific coding standards injected into every phase prompt. */
+function stackGuidance(plan: Plan): string {
+  const stack = plan.stack.map(s => s.toLowerCase());
+  const lines: string[] = [];
+
+  if (stack.some(s => /^python/.test(s) || ["fastapi", "django", "flask", "pytorch", "sklearn", "pandas"].includes(s))) {
+    lines.push("Python: type-annotate everything, use async/await where the framework supports it, write pytest tests (not unittest), manage deps with pyproject.toml (not setup.py), never use wildcard imports.");
+  }
+  if (stack.some(s => ["rust"].includes(s))) {
+    lines.push("Rust: run `cargo clippy -- -D warnings` and `cargo test` before finishing. Prefer `thiserror` for error types. No `unwrap()` in library code.");
+  }
+  if (stack.some(s => ["go", "golang"].includes(s))) {
+    lines.push("Go: run `go vet ./...` and `go test ./...`. Use `errors.Is`/`errors.As` for error handling. Every exported symbol needs a comment.");
+  }
+  if (stack.some(s => ["java", "spring", "kotlin"].includes(s))) {
+    lines.push("JVM: compile with `./mvnw verify` or `./gradlew build`. Tests via JUnit 5. No checked exceptions swallowed silently.");
+  }
+  if (stack.some(s => ["swift", "swiftui", "xcode"].includes(s))) {
+    lines.push("Swift: use `xcodebuild test` to verify. All async work via Swift Concurrency (async/await), not GCD. Run SwiftLint.");
+  }
+  if (stack.some(s => ["dbt", "spark", "airflow", "prefect", "dagster"].includes(s))) {
+    lines.push("Data engineering: every transformation must be idempotent. Store intermediate results as Parquet where possible. Add data quality tests (not_null, unique) for every primary key.");
+  }
+  if (stack.some(s => ["docker", "kubernetes", "terraform", "ansible"].includes(s))) {
+    lines.push("Infrastructure: use multi-stage Docker builds to minimise image size. Never embed secrets in images or Terraform state. Apply the principle of least privilege on IAM/RBAC.");
+  }
+  if (!lines.length) {
+    lines.push("Follow the language's idiomatic style and run its standard linter/formatter before finishing each phase.");
+  }
+
+  return lines.map(l => `- ${l}`).join("\n");
+}
+
 export function rulesFileContent(plan: Plan, projectRules: string, projectPath = ""): string {
   const design = projectPath ? designSection(plan, projectPath) : "";
   return [
@@ -181,6 +214,7 @@ export function rulesFileContent(plan: Plan, projectRules: string, projectPath =
     projectRules.trim(),
     "- Never edit PLAN.md, SPEC.md or anything under .meadow/.",
     "- Never install packages globally or write outside this repository.",
+    `\nStack guidance:\n${stackGuidance(plan)}`,
     design ? `\nDesign standard for every screen:\n${design}` : "",
     POLICY_PROMPT,
   ].filter(Boolean).join("\n");
