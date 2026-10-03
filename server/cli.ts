@@ -22,6 +22,7 @@ Usage:
   meadow init                         Guided setup: detects this repo, model providers, builds the graph, runs checks
   meadow update [--yes]               Check for a signed update, verify it, back up and install
   meadow doctor                       Check engines, agent model, memory, git and optional extras
+  meadow selftest                     Check guardrails, the engine broker and connected services (no changes made)
   meadow start [--port N] [--dev]     Start the daemon (dashboard + Telegram)
   meadow run <PLAN.md> [--engine E]   Run a plan from the command line (no Telegram needed)
   meadow plan validate <PLAN.md>      Validate a plan file
@@ -389,6 +390,18 @@ async function main() {
       return setup(args);
     case "doctor":
       return (await doctor()) ? 0 : 1;
+    case "selftest": {
+      const { runSelftest } = await import("./meadow/selftest");
+      const results = await runSelftest();
+      let area = "";
+      for (const result of results) {
+        if (result.area !== area) console.log(`${area ? "\n" : ""}${(area = result.area)[0].toUpperCase()}${result.area.slice(1)}`);
+        console.log(`  ${mark(result.ok)} ${result.name}${result.detail ? ` · ${result.detail}` : ""}`);
+      }
+      const failed = results.filter(result => !result.ok).length;
+      console.log(failed ? `\n${failed} check${failed === 1 ? "" : "s"} failed.` : "\nAll checks passed.");
+      return failed ? 1 : 0;
+    }
     case "start": {
       const { startDaemon } = await import("./_core/index");
       const port = flag(args, "--port");

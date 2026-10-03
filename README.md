@@ -107,6 +107,7 @@ The same build runs on macOS, Linux and Windows. CI tests every change on all th
 | `meadow init` | Guided setup: detects the current repo and model providers, registers the project, builds CodeAtlas and memory, runs the baseline checks, drafts a first plan |
 | `meadow update [--yes]` | Checks for a signed update, verifies signature and checksum, backs up the database, installs |
 | `meadow doctor` | Checks Node, git, the agent provider, memory, engines, Playwright, Telegram, voice |
+| `meadow selftest` | Checks the guardrails, the engine broker and the Supabase/GitHub rules in a throwaway data folder, and lists which services (Supabase, GitHub, Docker) are usable right now |
 | `meadow start [--port N]` | Starts the daemon: dashboard, Telegram, recovery of interrupted runs |
 | `meadow run <PLAN.md> [--engine E] [--project P]` | Runs a plan from the terminal |
 | `meadow plan validate <PLAN.md>` | Validates a plan with line-numbered errors |
@@ -119,8 +120,9 @@ The same build runs on macOS, Linux and Windows. CI tests every change on all th
 | `meadow atlas eval <project> [--json file]` | Benchmarks the retrieval modes against `.atlas/eval.json` |
 | `meadow atlas tools` / `meadow atlas mcp-config` | Lists the tools / prints the MCP config for Cursor and Claude Code |
 | `meadow mcp [--project P]` | Runs the CodeAtlas MCP server over stdio |
+| `meadow broker` | The MCP server Meadow gives the coding engine during a run (started by the engine, not by you) |
 
-In Telegram (and in the dashboard's Request page) you can also use `/new`, `/projects`, `/project`, `/plan`, `/status`, `/phase`, `/pause`, `/resume`, `/stop`, `/retry`, `/skip`, `/rollback`, `/logs`, `/engine`, `/next`, `/ask`, `/remember`, `/index`, `/notify`, `/budget`, `/shot`, `/investigate` (also `/why`) and `/help`.
+From Telegram alone you can start a project: describe the idea, or send a `PLAN.md`, `SPEC.md` or text file (the caption is the request). Meadow creates the project folder, asks its questions, sends the plan for approval, creates a private GitHub repository when the run starts, and reports every phase. In Telegram (and in the dashboard's Request page) you can also use `/new`, `/projects`, `/project`, `/plan`, `/status`, `/phase`, `/pause`, `/resume`, `/stop`, `/retry`, `/skip`, `/rollback`, `/logs`, `/engine`, `/next`, `/ask`, `/remember`, `/index`, `/notify`, `/budget`, `/shot`, `/investigate` (also `/why`) and `/help`.
 
 ## Automatic setup and self-maintenance
 
@@ -326,6 +328,19 @@ Check types:
 - `file_exists: <relative path>`
 - `http: <route or localhost URL>` — needs a `preview` block; Meadow starts the preview server itself.
 
+Optional `services: [supabase, docker]` lists hosted services the app needs. Generated plans then start with a built-in **Connect services** phase whose checks verify the settings were saved to a gitignored `.env.local` (without printing them). Plans can have up to 12 phases.
+
+## Guardrails and connected services
+
+The coding engine gets real access to build things, inside limits Meadow enforces:
+
+- **One policy table** decides every command: *forbidden* (sudo, deleting outside the project, reading keys or `.env` files, changing git remotes, force pushes, piping downloads into a shell, editing shell profiles), *needs your approval* (Homebrew/apt, global installs, Docker, deploys, `git push`), or *allowed* inside the project. The same rules go into the engine's own permission file and, when the CLI supports it, its sandbox. Every command the engine ran is audited after each step; a forbidden one blocks the phase.
+- **The engine asks through Meadow.** During a run it has a `meadow` MCP server with `ask_human` (a question with option buttons on Telegram), `request_system_action` (Meadow runs it outside the sandbox after you tap Approve once, or Always for this project), `request_cloud_resource` and `connected_services`. Unanswered questions expire and the engine picks the safest option and says so.
+- **Connected services are picked for you.** Meadow reads which MCP servers you connected in Cursor (for example Supabase) and whether the Cursor CLI can use them. If Supabase needs a one-time sign-in, you get a **Sign in** button (Telegram or Settings → Connected services) and Meadow reuses it for every project. It chooses your Supabase organisation itself (asking once if you have several), reuses a project with the app's name, creates free projects without asking, and asks before anything that costs money. Deleting, pausing or branching Supabase tools are never allowed.
+- **GitHub**: with a saved GitHub token, a project without a remote gets a private repository and each passed phase is pushed (never forced). **Docker**: if a project needs it and it isn't running, you're asked to start it.
+
+See [docs/EDGE-CASES.md](docs/EDGE-CASES.md) for how each of these behaves when something goes wrong.
+
 ## Configuration
 
 Settings live in `~/.meadow/config.json` and are editable from the dashboard's Settings page. Secrets live only in environment variables or `~/.meadow/secrets.env` (created with owner-only permissions), never in config files or project folders.
@@ -389,6 +404,8 @@ See [SECURITY.md](SECURITY.md) for the full model and how to report issues.
 - Change impact follows the edges CodeAtlas extracted. Calls made through dynamic dispatch, reflection or configuration it couldn't parse won't appear.
 - Hand-written `cmd:` checks run in the platform shell (`/bin/sh` or `cmd.exe`). A plan written with POSIX commands won't pass on native Windows; use `node -e` or tool commands (`npm test`) for plans you share across platforms.
 - End-to-end tests and screenshots need a Chromium-based browser (Playwright's, Chrome, Edge, Chromium or Brave). Without one, runs still pass on their checks but skip browser tests and images.
+- Guardrails are layered, not absolute. The engine's own deny list and sandbox stop commands up front; Meadow's audit sees the commands and MCP calls the engine reports and acts after the step (blocking the phase and leaving the branch for you to review). A command hidden inside a script the engine wrote and then ran is only seen as that script. Engines without a sandbox flag rely on the deny list and the audit.
+- Meadow can't call Supabase itself: Supabase's MCP uses Cursor's sign-in, so the engine gathers the facts (organisations, projects, cost) and Meadow decides. Unapproved `create_project` calls are caught afterwards. The one-time Supabase sign-in opens a browser on the computer running Meadow, not on your phone.
 - The CLI flags of `cursor-agent` and `claude` change between versions. Meadow detects them from `--help` and ignores unknown output, but a major CLI change can still need an adapter update. `meadow doctor` shows what was detected.
 
 ## Development

@@ -17,9 +17,10 @@ export function brokerEntry(projectId: number): { command: string; args: string[
   const source = path.join(root, "server", "cli.ts");
   const tsx = path.join(root, "node_modules", ".bin", process.platform === "win32" ? "tsx.cmd" : "tsx");
   const env = { MEADOW_HOME: meadowHome(), MEADOW_BROKER_PROJECT: String(projectId) };
-  if (fs.existsSync(built)) return { command: process.execPath, args: [built, "broker"], env };
-  if (fs.existsSync(source) && fs.existsSync(tsx)) return { command: tsx, args: [source, "broker"], env };
-  return null;
+  const fromSource = fs.existsSync(source) && fs.existsSync(tsx) ? { command: tsx, args: [source, "broker"], env } : null;
+  const fromBuild = fs.existsSync(built) ? { command: process.execPath, args: [built, "broker"], env } : null;
+  const runningBuilt = fileURLToPath(import.meta.url).split(path.sep).includes("dist");
+  return runningBuilt ? fromBuild ?? fromSource : fromSource ?? fromBuild;
 }
 
 const tracked = async (cwd: string, file: string) => (await capture("git", ["ls-files", "--error-unmatch", file], { cwd })).code === 0;
