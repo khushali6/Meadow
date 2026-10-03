@@ -14,7 +14,7 @@ import { addNote, approvePlan, createProject, findProject, getPlan, getProject, 
 import { indexMemory, indexProject, search } from "../rag/index";
 import { planSummaryText, projectDetail, statusText, usageToday } from "../service";
 import { contextSummary, gatherContext } from "./context";
-import { answerQuestion, appendPhases, buildSpec, classify, clarifyQuestions, generatePlan, improvePlan, looksLikePlanFile, projectNameFor, type Intent, type Question } from "./llm";
+import { answerQuestion, appendPhases, buildSpec, classify, clarifyQuestions, generatePlan, improvePlan, looksLikePlanFile, projectNameFor, stripCodeFence, type Intent, type Question } from "./llm";
 
 export type Button = { label: string; action: string };
 export type Reply = { text: string; buttons?: Button[][]; planId?: number; shot?: { projectId: number; route: string | null }; investigate?: { projectId: number; question: string } };
@@ -101,7 +101,29 @@ async function finalizeRequest(state: ConversationState): Promise<Reply> {
   }
   const kind = state.intent === "fix_bug" ? "fix_bug" : "add_feature";
   const fullRequest = `${request}${answers.length ? `\n\nClarifications:\n${answers.map(a => `- ${a.question}: ${a.answer}${a.assumed ? " (assumed)" : ""}`).join("\n")}` : ""}`;
-  const planMd = await appendPhases({ existingPlan: current.raw_md, request: fullRequest, kind, spec: current.spec_md, context: contextSummary(context) });
+  let planMd: string;
+  let isNewProject = false;
+  try {
+    planMd = await appendPhases({ existingPlan: current.raw_md, request: fullRequest, kind, spec: current.spec_md, context: contextSummary(context) });
+  } catch (appendError) {
+    // If the LLM can't append without rewriting the whole plan, it means the request is about a
+    // completely different product. Offer to start a new project instead of crashing.
+    const msg = (appendError as Error).message ?? "";
+    if (msg.includes("Existing phases must be kept unchanged") || msg.includes("could not produce a valid plan")) {
+      // Automatically route as a new project using the same answers already collected.
+      const newName = await uniqueName(state.projectName ?? (slugify(request.split(/\s+/).slice(0, 4).join("-")) || "project"));
+      const spec = await buildSpec({ request: fullRequest, answers, context: "Empty project.", projectName: newName });
+      const generated = await generatePlan({ spec, projectName: newName, context: "Empty project." });
+      const newProject = await createProject({ name: newName, description: request.slice(0, 200) });
+      const plan = savePlanVersion(newProject.id, generated, { specMd: spec, source: "generated" });
+      state.activeProjectId = newProject.id;
+      state.stage = "plan_review";
+      state.planId = plan.id;
+      return reviewReply(plan.id, `This looks like a brand-new project, not a change to ${project.name}. Here is a fresh plan for **${newName}**:`);
+    }
+    throw appendError;
+  }
+  if (isNewProject) return reviewReply(state.planId!, "");
   const spec = current.spec_md ? `${current.spec_md.trimEnd()}\n\n## ${kind === "fix_bug" ? "Bug fix" : "Feature"} request (${now().slice(0, 10)})\n${fullRequest}\n` : null;
   const plan = savePlanVersion(project.id, planMd, { specMd: spec, source: "generated" });
   state.stage = "plan_review";
@@ -296,8 +318,12 @@ export async function handleDocument(channel: string, chatId: string, file: { na
 }
 
 async function importPlan(state: ConversationState, raw: string): Promise<Reply> {
-  const parsed = parsePlan(raw);
+  // Strip a wrapping markdown code fence (```yaml ... ```) that some editors/AI assistants add.
+  const cleaned = stripCodeFence(raw);
+  const parsed = parsePlan(cleaned);
   if (!parsed.ok) return { text: `That plan has problems:\n${formatErrors(parsed.errors)}` };
+  // Use the cleaned version for storage, not the raw fenced one.
+  raw = cleaned;
   const existing = findProject(parsed.plan.project);
   const project = existing ?? (await createProject({ name: parsed.plan.project, description: parsed.plan.goal }));
   const plan = savePlanVersion(project.id, raw, { source: "imported" });

@@ -18,8 +18,14 @@ export type Classification = { intent: Intent; confidence: number; needs_clarifi
 
 export type Question = { id: string; text: string; options: string[]; default: string | null };
 
+/** Strip a single wrapping markdown code fence if present (```yaml ... ``` or ```md ... ```). */
+export function stripCodeFence(text: string): string {
+  return text.replace(/^```(?:yaml|markdown|md|yml)?\s*\n/, "").replace(/\n```\s*$/, "").trim();
+}
+
 export function looksLikePlanFile(text: string) {
-  return /^\s*---\s*\n[\s\S]*?\bphases\s*:/m.test(text);
+  const stripped = stripCodeFence(text);
+  return /^---\s*\n[\s\S]*?\bphases\s*:/m.test(stripped);
 }
 
 export async function classify(text: string, projects: string[], activeProject: string | null): Promise<Classification> {
@@ -27,13 +33,18 @@ export async function classify(text: string, projects: string[], activeProject: 
   return chatJson(getLlm(), [
     { role: "system", content: `You classify requests sent to Meadow, a local agent that builds software projects phase by phase.
 Reply with JSON only: {"intent": one of ${INTENTS.join("|")}, "confidence": 0..1, "needs_clarification": boolean, "project_hint": string|null}.
-- new_project: build something new.
-- add_feature: add or change behaviour in an existing project.
-- fix_bug: something in an existing project is broken.
-- question: asks about the code or how something works.
-- status: asks about progress.
-- control: pause/resume/stop/continue/rollback instructions.
-project_hint: the existing project name it refers to (from the list), or a short kebab-case name for a new project.` },
+
+Intent rules:
+- new_project: the user wants to build something that is clearly a DIFFERENT product from any existing project (different name, domain, or product idea). When in doubt between new_project and add_feature, prefer new_project if the request sounds like a standalone product.
+- add_feature: the request explicitly mentions an existing project name, OR clearly adds/changes one specific behaviour in the active project.
+- fix_bug: something in an existing project is broken or not working.
+- question: asks about how the code works.
+- status: asks about progress, what's done, what's running.
+- control: pause/resume/stop/continue/rollback/retry instructions.
+
+IMPORTANT: If there is an active project but the user's request describes a completely different product (different domain, different product name, completely unrelated feature set), classify it as new_project, not add_feature.
+
+project_hint: the matching existing project name (only for add_feature/fix_bug/question), or a short kebab-case name suggestion for a new project (for new_project). Null for control/status.` },
     { role: "user", content: `Existing projects: ${projects.join(", ") || "none"}\nActive project: ${activeProject ?? "none"}\n\nRequest:\n${redact(text).slice(0, 4000)}` },
   ], value => {
     const v = value as Partial<Classification>;
@@ -212,11 +223,15 @@ export async function appendPhases(input: { existingPlan: string; request: strin
   const existing = parsePlan(input.existingPlan);
   if (!existing.ok) throw new Error("The current plan is invalid; fix it before adding work.");
   const keep = existing.plan.phases.map(phase => `${phase.id}:${phase.name}`);
+  const keepBlock = keep.map((label, i) => `  Phase ${i + 1} (KEEP EXACTLY AS-IS): ${label}`).join("\n");
   return withServicesPhase(await planLoop([
-    { role: "system", content: `You are Meadow's planner. Extend an existing PLAN.md with 1-2 NEW phases appended at the end for the request. Keep every existing phase exactly as it is (same id, name, tasks, checks). New phase ids must be new.
-${input.kind === "fix_bug" ? "This is a bug fix: the first task of the first new phase must be \"Reproduce the bug with a failing automated test\", and that phase's checks must run that test (it must pass once fixed)." : ""}
+    { role: "system", content: `You are Meadow's planner. Extend an existing PLAN.md by APPENDING 1–2 NEW phases at the end.
+
+CRITICAL RULE: You MUST copy every existing phase into the output EXACTLY as it appears in the input — same id, same name, same tasks, same checks, same depends_on. Do NOT rewrite, rename, merge or remove any existing phase. Only ADD new phases with new ids after the last existing phase.
+
+${input.kind === "fix_bug" ? 'Bug fix: the first new phase\'s first task must be "Reproduce the bug with a failing automated test", and its checks must run that test.' : ""}
 Format example:\n\n${PLAN_FORMAT}\n\n${PLAN_RULES}` },
-    { role: "user", content: redact(`Request:\n${input.request}\n\n${await machineSummary()}\n\nCurrent PLAN.md:\n${input.existingPlan}\n\n${input.spec ? `SPEC.md:\n${input.spec.slice(0, 3000)}\n\n` : ""}Project context:\n${input.context.slice(0, 4000)}`) },
+    { role: "user", content: redact(`Request:\n${input.request}\n\n${await machineSummary()}\n\nExisting phases that MUST appear unchanged in your output:\n${keepBlock}\n\nFull current PLAN.md (copy all existing phases verbatim, then append new ones):\n${input.existingPlan}\n\n${input.spec ? `SPEC.md:\n${input.spec.slice(0, 3000)}\n\n` : ""}Project context:\n${input.context.slice(0, 4000)}`) },
   ], plan => {
     const ids = plan.phases.map(phase => `${phase.id}:${phase.name}`);
     const missing = keep.filter(item => !ids.includes(item));
