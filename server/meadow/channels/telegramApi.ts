@@ -5,7 +5,7 @@ export type InlineButton = { text: string; callback_data: string };
 
 export type TgUpdate = {
   update_id: number;
-  message?: { message_id: number; from?: { id: number; username?: string }; chat: { id: number; type: string }; text?: string; voice?: { file_id: string; duration: number }; audio?: { file_id: string }; document?: { file_id: string; file_name?: string } };
+  message?: { message_id: number; from?: { id: number; username?: string }; chat: { id: number; type: string }; text?: string; voice?: { file_id: string; duration: number }; audio?: { file_id: string }; document?: { file_id: string; file_name?: string; file_size?: number }; caption?: string; photo?: Array<{ file_id: string }> };
   callback_query?: { id: string; from: { id: number; username?: string }; data?: string; message?: { message_id: number; chat: { id: number } } };
 };
 

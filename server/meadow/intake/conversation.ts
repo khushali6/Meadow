@@ -257,6 +257,44 @@ async function routeIntent(state: ConversationState, intent: Intent, text: strin
   }
 }
 
+function projectPicker(state: ConversationState): Reply {
+  const projects = listProjects();
+  if (!projects.length) return { text: "No projects yet. Describe one, or send a PLAN.md, to get started." };
+  const label = (project: (typeof projects)[number]) => `${project.name} · ${harness.isActive(project.id) ? "running" : harness.latestExecution(project.id)?.status ?? "no run yet"}`;
+  return {
+    text: `Projects (tap one to switch):\n${projects.map(project => `${project.id === state.activeProjectId ? "▸" : "·"} ${label(project)}`).join("\n")}`,
+    buttons: projects.slice(0, 20).map(project => [{ label: `${project.id === state.activeProjectId ? "▸ " : ""}${label(project)}`.slice(0, 60), action: `pick:${project.id}` }]),
+  };
+}
+
+const MAX_DOCUMENT_BYTES = 20 * 1024 * 1024;
+
+/** A file sent in chat: a PLAN.md is imported; anything else textual is a spec or idea, with the caption as the request. */
+export async function handleDocument(channel: string, chatId: string, file: { name: string; data: Buffer; caption?: string }): Promise<Reply> {
+  if (!/\.(md|markdown|txt|ya?ml)$/i.test(file.name)) return { text: "I can read PLAN.md, SPEC.md or plain-text files. Send the plan or idea as a .md or .txt file, or just type it." };
+  if (file.data.length > MAX_DOCUMENT_BYTES) return { text: "That file is larger than 20 MB. Send a shorter plan or spec." };
+  if (file.data.includes(0)) return { text: `${file.name} looks like a binary file, not text. Send a Markdown or text file.` };
+  const content = file.data.toString("utf8").replace(/^\uFEFF/, "").trim();
+  if (!content) return { text: `${file.name} is empty.` };
+  if ((content.match(/\uFFFD/g) ?? []).length > content.length / 100) return { text: `${file.name} isn't valid UTF-8 text. Save it as UTF-8 and send it again.` };
+  const caption = file.caption?.trim() ?? "";
+  if (looksLikePlanFile(content)) return handleText(channel, chatId, content);
+  const state = loadState(channel, chatId);
+  try {
+    const reply = await planOrigin.run({ channel }, async () => {
+      if (caption.startsWith("/")) return command(state, caption);
+      if (caption) return routeText(state, `${caption}\n\n${content}`);
+      state.request = content;
+      return startIntake(state, content, "new_project", null);
+    });
+    saveState(channel, chatId, state);
+    return reply;
+  } catch (error) {
+    saveState(channel, chatId, state);
+    return { text: `Something went wrong: ${redact((error as Error).message)}` };
+  }
+}
+
 async function importPlan(state: ConversationState, raw: string): Promise<Reply> {
   const parsed = parsePlan(raw);
   if (!parsed.ok) return { text: `That plan has problems:\n${formatErrors(parsed.errors)}` };
@@ -291,14 +329,14 @@ const HELP = `Commands:
 /logs — last log lines
 /engine <name> — switch engine
 /project <name> — switch project
-/projects — list projects
+/projects — pick a project
 /ask <question> — ask about the codebase
 /investigate <question> — CodeAtlas: multi-agent investigation with cited, verified evidence (also /why)
 /remember <text> — add a note to project memory
 /index — re-index the project
 /notify <all|phases|failures> — notification level
 /budget — usage and caps
-Or just describe what you want.`;
+Or just describe what you want, or send a PLAN.md or SPEC.md file (a caption tells me what to do with it). Meadow creates the project folder and a private GitHub repository for you.`;
 
 async function command(state: ConversationState, text: string): Promise<Reply> {
   const [rawCmd, ...rest] = text.split(/\s+/);
@@ -311,10 +349,8 @@ async function command(state: ConversationState, text: string): Promise<Reply> {
     case "/new":
       if (!arg) return { text: "Describe the project after /new, e.g. /new a recipe site with search." };
       return startIntake(state, arg, "new_project", null);
-    case "/projects": {
-      const projects = listProjects();
-      return { text: projects.length ? projects.map(project => `${project.id === state.activeProjectId ? "▸" : "·"} ${project.name} (${project.engine})`).join("\n") : "No projects yet. Describe one to get started." };
-    }
+    case "/projects":
+      return projectPicker(state);
     case "/project": {
       const project = findProject(arg);
       if (!project) return { text: `No project called ${arg}. /projects lists them.` };
@@ -441,6 +477,11 @@ async function routeAction(state: ConversationState, action: string, actor: stri
       return { text: "OK." };
     case "svclogin":
       return { text: startMcpLogin(a, actor).detail };
+    case "pick": {
+      const project = getProject(id);
+      state.activeProjectId = project.id;
+      return { text: `Switched to ${project.name}.\n${statusText(project.id)}` };
+    }
     case "cancel":
       Object.assign(state, { ...emptyState(), activeProjectId: state.activeProjectId });
       return { text: "Cancelled. Nothing was run." };
@@ -462,7 +503,9 @@ async function routeAction(state: ConversationState, action: string, actor: stri
       await approvePlan(plan.id);
       state.stage = "idle";
       state.activeProjectId = plan.project_id;
+      const busy = harness.activeProjectIds().filter(other => other !== plan.project_id).map(other => getProject(other).name);
       await harness.start(plan.project_id);
+      if (busy.length) return { text: `Plan v${plan.version} approved and queued. ${busy.join(", ")} ${busy.length === 1 ? "is" : "are"} running; the engine works on one step at a time, so ${getProject(plan.project_id).name} takes turns with it. I'll report back at each phase end.` };
       return { text: `Plan v${plan.version} approved. Starting phase 1 on ${getProject(plan.project_id).engine}. I'll report back at each phase end.` };
     }
     case "edit":

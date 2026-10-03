@@ -3,7 +3,7 @@ import { getSecret, loadConfig, saveConfig } from "../config";
 import { getDb } from "../core/db";
 import { redact, registerSecret } from "../core/redact";
 import { chatInvestigate } from "../atlas/chat";
-import { handleAction, handleText, type Reply } from "../intake/conversation";
+import { handleAction, handleDocument, handleText, type Reply } from "../intake/conversation";
 import { statusText } from "../service";
 import { captureOnDemand } from "../visual/ondemand";
 import { relayUrl, requestLink, unlinkDevice, type RelayLink } from "./relay";
@@ -225,11 +225,26 @@ export class TelegramChannel {
       await api.sendMessage(chatId, `Heard: "${text}"`);
     } else if (message.document) {
       const name = message.document.file_name ?? "";
-      if (!/\.(md|markdown|txt|ya?ml)$/i.test(name)) {
-        await api.sendMessage(chatId, "Send a PLAN.md (Markdown with YAML front-matter) to import a plan.");
+      if ((message.document.file_size ?? 0) > 20 * 1024 * 1024) {
+        await api.sendMessage(chatId, "That file is larger than 20 MB. Send a shorter plan or spec.");
         return;
       }
-      text = (await api.downloadFile(message.document.file_id)).data.toString("utf8");
+      if (!/\.(md|markdown|txt|ya?ml)$/i.test(name)) {
+        await this.send(chatId, await handleDocument(CHANNEL, String(message.from.id), { name, data: Buffer.alloc(0), caption: message.caption }));
+        return;
+      }
+      let data: Buffer;
+      try {
+        data = (await api.downloadFile(message.document.file_id)).data;
+      } catch (error) {
+        await api.sendMessage(chatId, `I couldn't download ${name || "that file"}: ${redact((error as Error).message)}`);
+        return;
+      }
+      await this.send(chatId, await handleDocument(CHANNEL, String(message.from.id), { name, data, caption: message.caption }));
+      return;
+    } else if (message.photo) {
+      await api.sendMessage(chatId, "I can't read images yet. Type the idea, or send a PLAN.md or SPEC.md file.");
+      return;
     }
     if (!text) return;
     const reply = await handleText(CHANNEL, String(message.from.id), text);

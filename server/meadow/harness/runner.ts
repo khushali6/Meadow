@@ -100,6 +100,10 @@ export class Harness {
     return this.active.has(projectId);
   }
 
+  activeProjectIds(): number[] {
+    return [...this.active.keys()];
+  }
+
   latestExecution(projectId: number): ExecutionRow | undefined {
     return getDb().get<ExecutionRow>("SELECT * FROM executions WHERE project_id = ? ORDER BY id DESC LIMIT 1", projectId);
   }
