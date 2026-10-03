@@ -15,7 +15,7 @@ afterEach(() => env.cleanup());
 
 const designed = { bodyFont: "Inter, system-ui, sans-serif", bodyMargin: "0px", cssRules: 120, hoverRules: 6, focusRules: 3, interactive: 4, nativeControls: [], bodySize: 16, largestText: 48, colors: 8, contentWidth: 1280, viewportWidth: 1280, deviceWidth: 1280, viewportMeta: true };
 const phase = { id: "ui", name: "Screens", dependsOn: [], tasks: ["Build the list"], checks: [{ kind: "cmd" as const, cmd: "npm test" }], doneWhen: "List works" };
-const plan = (web: boolean) => ({ project: "p", goal: "Track habits", stack: web ? ["react", "vite"] : ["python"], constraints: [], services: [], preview: null, phases: [phase] }) as never;
+const plan = (web: boolean) => ({ project: "p", goal: web ? "Track habits" : "A CLI that converts CSV to JSON", stack: web ? ["react", "vite"] : ["python"], constraints: [], services: [], preview: null, phases: [phase] }) as never;
 
 describe("the design audit", () => {
   it("passes a designed page", () => {
@@ -48,6 +48,10 @@ describe("the design standard in prompts", () => {
     expect(isWebPlan({ preview: null, stack: ["Next"] })).toBe(true);
     expect(isWebPlan({ preview: { command: "x", url: "http://localhost:3000" } as never, stack: [] })).toBe(true);
     expect(isWebPlan({ preview: null, stack: ["python", "click"] })).toBe(false);
+    expect(isWebPlan({ preview: null, stack: ["expo"] })).toBe(true);
+    expect(isWebPlan({ preview: null, stack: ["typescript"], goal: "A dashboard for team expenses" })).toBe(true);
+    expect(isWebPlan({ preview: null, stack: ["typescript"], goal: "A CLI app that renames photos" })).toBe(false);
+    expect(isWebPlan({ preview: null, stack: ["go"], goal: "A library for parsing dates" })).toBe(false);
   });
 
   it("goes into phase, fix and rules prompts for web projects", () => {

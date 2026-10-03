@@ -3,11 +3,15 @@ import path from "node:path";
 import { homePath, loadConfig } from "../config";
 import type { Plan } from "../planning/format";
 
-const WEB_STACK = /^(react|next|nextjs|vue|nuxt|svelte|sveltekit|vite|astro|angular|solid|remix|html|css|tailwind|tailwindcss|preact|lit|qwik|express-ejs|django|flask|rails|laravel)$/i;
+const UI_STACK = /^(react|next|next\.?js|vue|nuxt|svelte|sveltekit|vite|astro|angular|solid|solidjs|remix|html|css|tailwind|tailwindcss|preact|lit|qwik|htmx|django|flask|fastapi|express|hono|rails|laravel|streamlit|gradio|electron|tauri|react[- ]native|expo|flutter|swiftui|jetpack[- ]compose|ionic|capacitor)$/i;
+const UI_GOAL = /\b(web ?app|website|web site|site|landing|page|dashboard|portal|front-?end|ui|interface|app|application|admin|storefront|shop|store|blog|portfolio|tracker|calculator|game)\b/i;
+const NO_UI_GOAL = /\b(cli|command[- ]line|library|sdk|package|api only|backend only|headless|daemon|cron|script|bot)\b/i;
 
-/** Whether the plan builds something people look at in a browser. */
-export function isWebPlan(plan: Pick<Plan, "preview" | "stack">): boolean {
-  return Boolean(plan.preview) || (plan.stack ?? []).some(item => WEB_STACK.test(item.trim()));
+/** Whether the plan builds something people look at: a web page, a desktop or mobile app. */
+export function isWebPlan(plan: Pick<Plan, "preview" | "stack"> & { goal?: string }): boolean {
+  if (plan.preview || (plan.stack ?? []).some(item => UI_STACK.test(item.trim()))) return true;
+  const goal = plan.goal ?? "";
+  return UI_GOAL.test(goal) && !NO_UI_GOAL.test(goal);
 }
 
 export const DESIGN_STANDARD = `This is a product people will judge on sight. Build a premium, intentional UI, never browser defaults or a bare template.
@@ -19,7 +23,8 @@ export const DESIGN_STANDARD = `This is a product people will judge on sight. Bu
 - States: designed empty states (a short helpful message and the next action), inline validation messages next to the field, loading and success feedback. Errors are calm and readable, not raw red text.
 - Motion: purposeful and quick (150–250ms for interactions, ease-out), transform/opacity only, and respect prefers-reduced-motion. For React apps, Motion (the "motion" package) for enter/exit, layout and press feedback; plain CSS transitions are fine elsewhere. Nothing loops or bounces.
 - Accessibility: semantic HTML, labels on every field, 4.5:1 text contrast, keyboard reachable.
-Before finishing, open the app in a browser at desktop and phone width and fix anything that looks unstyled, cramped, misaligned or generic.`;
+- Mobile or desktop apps (React Native, Flutter, SwiftUI, Electron, Tauri): the same rules through the platform's theme (one theme file with the tokens), native-feeling navigation, safe areas and touch targets of at least 44px.
+Before finishing, open the app (in a browser at desktop and phone width, or in the simulator) and fix anything that looks unstyled, cramped, misaligned or generic.`;
 
 /** The design brief for this project: the project's .meadow/design.md, else ~/.meadow/design.md, else the built-in standard. */
 export function designBrief(projectPath: string): string {
@@ -35,7 +40,7 @@ export function designBrief(projectPath: string): string {
 }
 
 /** The brief to give the engine for this plan, or "" when the plan has no UI or the standard is turned off. */
-export function designSection(plan: Pick<Plan, "preview" | "stack">, projectPath: string): string {
+export function designSection(plan: Pick<Plan, "preview" | "stack"> & { goal?: string }, projectPath: string): string {
   if (!loadConfig().harness.design || !isWebPlan(plan)) return "";
   return designBrief(projectPath);
 }
