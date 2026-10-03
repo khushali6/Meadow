@@ -33,6 +33,7 @@ import { checkEngineGuards, writeEngineGuards } from "../guard/engineConfig";
 import { classifyCommand, classifyMcpCall, type Verdict } from "../guard/policy";
 import { compileFixPrompt, compilePhasePrompt, rulesFileContent } from "./prompts";
 import { generateProjectDocs } from "./docs";
+import { generateUiDesignBrief, isWebPlan } from "./design";
 import { summarizePhase } from "./summarize";
 import { verify, type CheckOutcome } from "./verifier";
 
@@ -280,6 +281,18 @@ export class Harness {
     if (repo.status === "created") this.emit(state, "message", "Created a private GitHub repository", `${repo.detail}${repo.url ? `\n${repo.url}` : ""}`);
     const rows = phasesFor(planId);
     if ((await this.servicesGate(state, project, plan, rows)) === "parked") return;
+
+    // Generate a unique per-project design brief from plan.ui.prompt before any phase runs.
+    if (plan.ui?.prompt && isWebPlan(plan)) {
+      try {
+        this.emit(state, "message", "Generating design system", `Visual direction: "${plan.ui.prompt.slice(0, 120)}${plan.ui.prompt.length > 120 ? "…" : ""}"`);
+        await generateUiDesignBrief(plan, project.path, state.abort.signal);
+        this.emit(state, "message", "Design system ready", "Unique palette, typography and motion spec written to .meadow/design.md — all phases will follow it.");
+      } catch {
+        // Non-fatal — phases proceed with the universal DESIGN_STANDARD.
+      }
+    }
+
     const ordered = executionOrder(plan.phases);
     for (const phase of ordered) {
       const row = rows.find(item => item.phase_key === phase.id)!;

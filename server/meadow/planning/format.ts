@@ -16,6 +16,16 @@ export type PlanPhase = {
 
 export type Preview = { command: string; url: string; readyTimeoutS: number; routes: string[] };
 
+/** Per-project UI design specification provided by the user. */
+export type UiConfig = {
+  /** Free-text visual direction: mood, references, palette hints, animation style. Max 2000 chars. */
+  prompt?: string;
+  /** Preferred animation library: "motion" | "gsap" | "anime" | "css". Defaults to "motion". */
+  animations?: string;
+  /** A URL to a site/screenshot for visual inspiration (just used as a text hint in the design brief). */
+  reference?: string;
+};
+
 export type Plan = {
   project: string;
   goal: string;
@@ -24,6 +34,8 @@ export type Plan = {
   services: string[];
   preview: Preview | null;
   phases: PlanPhase[];
+  /** Optional UI design spec. When present, Meadow generates a unique design brief before phase 1. */
+  ui: UiConfig | null;
   body: string;
 };
 
@@ -236,9 +248,27 @@ export function parsePlan(markdown: string): ParseResult {
   const cycle = findCycle(phases);
   if (cycle) errors.push({ line: lineOf(phasesNode), field: "phases.depends_on", message: `Dependency cycle: ${cycle.join(" → ")}` });
 
+  // Parse optional `ui` field.
+  let ui: UiConfig | null = null;
+  if (data.ui !== undefined && data.ui !== null) {
+    const uiNode = getNode(root, "ui");
+    const uiRaw = data.ui as Record<string, unknown>;
+    if (typeof uiRaw !== "object" || Array.isArray(uiRaw)) {
+      errors.push({ line: lineOf(uiNode), field: "ui", message: "`ui` must be a mapping with optional keys: prompt, animations, reference." });
+    } else {
+      const uiPrompt = typeof uiRaw.prompt === "string" ? uiRaw.prompt.trim().slice(0, 2000) : undefined;
+      const uiAnimations = typeof uiRaw.animations === "string" ? uiRaw.animations.trim().toLowerCase() : "motion";
+      const uiReference = typeof uiRaw.reference === "string" ? uiRaw.reference.trim().slice(0, 500) : undefined;
+      if (!["motion", "gsap", "anime", "css"].includes(uiAnimations)) {
+        warnings.push({ line: lineOf(uiNode), field: "ui.animations", message: `Unknown animation library "${uiAnimations}". Meadow will use "motion". Supported values: motion, gsap, anime, css.` });
+      }
+      ui = { prompt: uiPrompt, animations: uiAnimations, reference: uiReference };
+    }
+  }
+
   if (errors.length) return { ok: false, plan: null, errors, warnings };
   if (phases.length > MAX_PHASES) warnings.push({ line: lineOf(phasesNode), field: "phases", message: `${phases.length} phases is a lot; plans over ${MAX_PHASES} phases are hard to review. Consider splitting the project.` });
-  return { ok: true, plan: { project, goal, stack, constraints, services, preview, phases, body: markdown.slice(match[0].length).trim() }, errors: [], warnings };
+  return { ok: true, plan: { project, goal, stack, constraints, services, preview, phases, ui, body: markdown.slice(match[0].length).trim() }, errors: [], warnings };
 }
 
 export function findCycle(phases: Pick<PlanPhase, "id" | "dependsOn">[]): string[] | null {

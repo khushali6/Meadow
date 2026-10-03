@@ -101,4 +101,35 @@ describe("PLAN.md parser", () => {
     const result = parsePlan(SPEC_EXAMPLE.replace("file_exists: src/app/menu/page.tsx", "file_exists: ../../etc/passwd"));
     expect(result.ok).toBe(false);
   });
+
+  it("parses the ui field and accepts known animation libraries", () => {
+    const withUi = SPEC_EXAMPLE.replace("stack: [nextjs, typescript, sqlite]", `stack: [nextjs, typescript, sqlite]
+ui:
+  prompt: Dark brutalist look, amber accent, JetBrains Mono everywhere
+  animations: gsap
+  reference: https://linear.app`);
+    const result = parsePlan(withUi);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.plan.ui?.prompt).toContain("brutalist");
+    expect(result.plan.ui?.animations).toBe("gsap");
+    expect(result.plan.ui?.reference).toBe("https://linear.app");
+  });
+
+  it("warns on unknown animation libraries but still parses", () => {
+    const withBadAnim = SPEC_EXAMPLE.replace("stack: [nextjs, typescript, sqlite]", `stack: [nextjs, typescript, sqlite]
+ui:
+  prompt: Cool vibes
+  animations: unknown-lib`);
+    const result = parsePlan(withBadAnim);
+    expect(result.ok).toBe(true);
+    expect(result.warnings.some(w => /animation/i.test(w.message))).toBe(true);
+  });
+
+  it("returns ui: null when the field is absent", () => {
+    const result = parsePlan(SPEC_EXAMPLE);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.plan.ui).toBeNull();
+  });
 });

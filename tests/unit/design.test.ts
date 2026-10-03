@@ -57,8 +57,8 @@ describe("the design standard in prompts", () => {
   it("goes into phase, fix and rules prompts for web projects", () => {
     const input = { plan: plan(true), phase, projectPath: env.home, projectRules: "", previousSummaries: [], context: "" };
     expect(compilePhasePrompt(input)).toContain("# Design standard (required for every screen you touch)");
-    expect(compilePhasePrompt(input)).toContain("Design tokens first");
-    expect(compileFixPrompt({ plan: plan(true), phase, projectPath: env.home, failing: { check: phase.checks[0], exitCode: 1, output: "boom" } })).toContain("Design tokens first");
+    expect(compilePhasePrompt(input)).toContain("Tokens first");
+    expect(compileFixPrompt({ plan: plan(true), phase, projectPath: env.home, failing: { check: phase.checks[0], exitCode: 1, output: "boom" } })).toContain("Tokens first");
     expect(rulesFileContent(plan(true), "", env.home)).toContain("Design standard for every screen");
     expect(acceptancePhase(plan(true)).tasks.join("\n")).toMatch(/checks the design in the browser/);
   });

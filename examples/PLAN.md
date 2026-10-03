@@ -2,10 +2,25 @@
 project: habit-tracker
 goal: A small web app to track daily habits with streaks
 stack: [react, vite, vitest]
+
+# ui: Meadow generates a unique design system from this prompt before phase 1 runs.
+# Every phase prompt will include the resulting palette, typography, and motion spec.
+ui:
+  prompt: >
+    Dark, focused productivity tool. Think Bear meets Streaks — a near-black canvas
+    (#0D0D0D), warm cream text (#F5F0E8), muted sage dividers, a single amber-gold
+    accent for active streaks and primary actions. Monospace font for numbers and
+    dates. Micro-animations only: a gentle fade-up on card mount, a satisfying
+    scale-pop when a habit is checked, and a soft glow pulse on the active streak
+    count. No gradients, no blur, no shadows larger than 1px.
+  animations: motion   # motion | gsap | anime | css
+  reference: https://linear.app  # visual mood reference — not fetched, just a hint
+
 preview:
   command: npm run dev -- --port 5173 --strictPort
   url: http://127.0.0.1:5173
   routes: ["/"]
+
 phases:
   - id: scaffold
     name: Project scaffold
@@ -13,26 +28,36 @@ phases:
       - Create a Vite + React + TypeScript app in the project root
       - Add Vitest with one passing smoke test
       - Add npm scripts build and test
-      - Design system in src/styles/tokens.css - CSS variables for palette, fonts (Inter + JetBrains Mono), type scale, spacing, radii and motion, plus a reset
-      - App shell - header with the product name and today's date, a max-width main column, styled buttons and inputs with hover and focus states
+      - Read .meadow/design.md (generated from the ui.prompt above) and implement
+        the full design system in src/styles/tokens.css — every CSS variable for
+        palette, fonts, type scale, spacing, radii and motion durations exactly
+        as specified, no stray hex values anywhere else in the codebase
+      - Create src/components/ui/motion.tsx with ready-to-use motion primitives
+        (FadeIn, SlideUp, StaggerList, ScalePop) using the motion package
+      - App shell — header with product name, today's date in monospace, a max-width
+        main column, styled buttons (primary dark-fill, secondary outline) and inputs
+        with focus rings; all values from tokens.css
     checks:
       - file_exists: package.json
       - file_exists: src/styles/tokens.css
+      - file_exists: src/components/ui/motion.tsx
       - cmd: npm install --no-audit --no-fund
         timeout: 300
       - cmd: npm run build
       - cmd: npm test -- --run
-    done_when: The app builds and the test suite runs
+    done_when: The app builds, tests pass, and the design tokens are in place
 
   - id: habits
     name: Habit list with streaks
     depends_on: [scaffold]
     tasks:
-      - Add a form to create habits and a list showing them
-      - Mark a habit done for today; compute the current streak
+      - Add a form to create habits (inline validation for blank or duplicate names)
+      - Show habits in a list; each row uses the design tokens for spacing and borders
+      - Mark a habit done for today — use the ScalePop motion primitive on check
+      - Compute current streak; display in monospace with the amber-gold accent when
+        streak > 0; show a glow-pulse animation via the motion spec from design.md
       - Persist habits in localStorage
-      - Designed empty state, inline validation for blank or duplicate names, and a subtle animation when a day is checked off
-      - Unit-test the streak calculation, including gaps and today/yesterday edges
+      - Unit-test the streak calculation (gaps, today/yesterday edges)
     checks:
       - cmd: npm test -- --run
       - cmd: npm run build
@@ -43,16 +68,22 @@ phases:
     name: Weekly view
     depends_on: [habits]
     tasks:
-      - Show the last seven days per habit as a row of cells with weekday labels, today highlighted in the accent colour
-      - Recompose the layout for a 390px wide phone screen; nothing scrolls sideways
+      - Show the last seven days per habit as a row of cells with weekday labels
+      - Today's cell uses the accent colour; completed cells use a filled variant
+      - Use StaggerList to animate the cells in on mount (50ms stagger, FadeIn)
+      - Recompose for 390px phone — full-width rows, nothing scrolls sideways
     checks:
       - cmd: npm test -- --run
       - cmd: npm run build
       - http: /
-    done_when: The weekly grid renders for each habit on desktop and mobile
+    done_when: The weekly grid renders correctly on desktop and mobile with animations
 ---
 
 # Notes for the engine
 
-- Keep dependencies small: React, plus the "motion" package for interface animation if needed. No component library; the look comes from the design tokens.
-- Prefer small pure functions for date math so they are easy to test.
+- The design system is in `.meadow/design.md` — generated automatically by Meadow
+  from the `ui.prompt` above before phase 1. Always read it before writing any CSS.
+- Animation library: `motion` (the "motion" package, not "framer-motion").
+  Import: `import { motion, AnimatePresence } from "motion/react"`.
+- Keep dependencies small: React, motion. No component libraries.
+- Prefer small pure functions for date math so they are easy to unit-test.
