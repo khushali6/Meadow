@@ -148,7 +148,7 @@ describe("finished app showcase", async () => {
   }, 120_000);
 
   it.skipIf(!browser)("tests the whole app in a browser, sends failures back to the engine, and only then sends each case's screenshots", async () => {
-    saveConfig({ telegram: { notificationLevel: "phases" } });
+    saveConfig({ telegram: { notificationLevel: "phases" }, harness: { design: false } });
     const photos: Array<{ path: string; caption: string }> = [];
     const { calls, target } = fakeTarget();
     target.api.sendPhotos = async (_chat: number, items: Array<{ path: string; caption: string }>) => void photos.push(...items);

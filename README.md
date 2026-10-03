@@ -341,6 +341,16 @@ The coding engine gets real access to build things, inside limits Meadow enforce
 
 See [docs/EDGE-CASES.md](docs/EDGE-CASES.md) for how each of these behaves when something goes wrong.
 
+## Design standard for web apps
+
+Coding engines build exactly what they are asked for, so a plan that never mentions design gets browser defaults. For web projects (a `preview` block or a web stack) Meadow therefore:
+
+- puts a **design brief** in every phase and fix prompt and in the engine's rules file: design tokens as CSS variables, deliberate fonts, a type scale, a restrained palette with one accent, styled controls with hover/focus/active/disabled states, designed empty/error/loading states, purposeful motion that respects reduced-motion, and a recomposed phone layout. The default direction is editorial and typography-led; put your own brief in `~/.meadow/design.md` (all projects) or `.meadow/design.md` (one project) to replace it;
+- tells the planner to start every web plan with a design-system step;
+- **checks the result in the browser** as part of the end-to-end tests, from computed styles rather than an opinion: the browser's default font, almost no CSS, the default 8px body margin, native-looking buttons and inputs, no heading hierarchy, a two-colour page, no hover or focus styles, a missing viewport tag or sideways scrolling at 390px. Any of these fails the run, and the engine gets the list to fix.
+
+Turn it off in Settings → Engine → *Premium design standard* (`harness.design`). The model matters too: the engine's model defaults to Cursor's *Auto*; pick a stronger one in Settings → *Model for Cursor CLI* (`engine.models.cursor`).
+
 ## Configuration
 
 Settings live in `~/.meadow/config.json` and are editable from the dashboard's Settings page. Secrets live only in environment variables or `~/.meadow/secrets.env` (created with owner-only permissions), never in config files or project folders.

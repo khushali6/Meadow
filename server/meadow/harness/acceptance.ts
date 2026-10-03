@@ -1,3 +1,4 @@
+import { loadConfig } from "../config";
 import { getDb } from "../core/db";
 import * as git from "../core/git";
 import { checkLabel, type Check, type Plan, type PlanPhase } from "../planning/format";
@@ -7,6 +8,7 @@ import { E2E_FILE, E2E_FORMAT, failureReport, loadScenarios, runEndToEnd, scenar
 import { detectLaunch, launchApp, type LaunchSpec } from "../visual/launch";
 import type { PreviewHandle } from "../visual/preview";
 import type { CheckOutcome } from "./verifier";
+import { isWebPlan } from "./design";
 
 export const ACCEPTANCE_KEY = "meadow-e2e";
 export const ACCEPTANCE_NAME = "End-to-end tests in a browser";
@@ -30,6 +32,7 @@ export function acceptancePhase(plan: Plan): PlanPhase {
       E2E_FORMAT,
       "Start the app exactly as a user would (the dev or start script, nothing overridden) and use it in a browser yourself. Fix every error: crashes, console errors, failed API calls, API calls answered by an HTML page, and error messages shown on screen.",
       "The app must run on any machine: don't depend on a port another program may own (fall back to a free port, or have the client discover the API port instead of hardcoding it), and keep the dev proxy and the API server on the same port setting.",
+      ...(loadConfig().harness.design && isWebPlan(plan) ? ["Meadow also checks the design in the browser at desktop and phone width: a page that still looks like browser defaults (default font, unstyled buttons or inputs, no hierarchy, no hover or focus styles, sideways scrolling on a phone) fails. Polish every screen to the design standard."] : []),
       "Keep every existing check passing.",
     ],
     checks: checks.length ? checks : [{ kind: "file_exists", path: E2E_FILE }],
@@ -98,7 +101,7 @@ export async function runAcceptance(input: { projectPath: string; projectId: num
       return fail(`The app did not start with \`${applies.spec.how}\`, the way a user would run it:\n${message.slice(-3000)}`, `launch:${message.split("\n")[0]}`, { runHow: applies.spec.how });
     }
     input.onProgress(`Running ${cases.length + 1} end-to-end test cases`, handle.url);
-    const results = await runEndToEnd({ browser: applies.browser, baseUrl: handle.url, cases, projectPath: input.projectPath, projectId: input.projectId, phaseId: input.phaseId, folder: input.folder });
+    const results = await runEndToEnd({ browser: applies.browser, baseUrl: handle.url, cases, projectPath: input.projectPath, projectId: input.projectId, phaseId: input.phaseId, folder: input.folder, design: loadConfig().harness.design });
     const failing = results.filter(result => !result.passed);
     const common = { results, runHow: applies.spec.how, url: handle.url };
     if (!failing.length) return { outcome: outcome(true, `${results.length}/${results.length} end-to-end test cases passed`, started), signature: "", ...common };

@@ -96,7 +96,8 @@ phases:
     name: Scaffold and base layout
     tasks:
       - Initialise the project with the chosen stack
-      - Create the shared layout and navigation
+      - Design system - a theme stylesheet with CSS variables (palette, fonts, type scale, spacing, radii), a reset, and styled base components (buttons, inputs, cards)
+      - Create the shared layout and navigation with that design system, responsive down to 390px
     checks:
       - cmd: npm install && npm run build
       - file_exists: src/app/layout.tsx
@@ -128,7 +129,8 @@ const PLAN_RULES = `Rules:
 - Use only free, local tools and services.
 - Checks and the preview command may only use tools listed under "Tools installed"; pick the stack and package manager from those. If the project already has a lockfile, use its package manager.
 - depends_on must reference earlier phase ids and form no cycles.
-- preview.url must be http://localhost:<port>.`;
+- preview.url must be http://localhost:<port>.
+- Web apps must look premium, not like browser defaults: the first phase sets up the design system (theme stylesheet with design tokens, deliberate fonts, reset, styled base components, page layout), and every phase that adds screens includes a task for their designed empty, error and loading states and their phone layout. Never write constraints like "no styling" or "minimal CSS".`;
 
 async function planLoop(messages: ChatMessage[], accept: (plan: Plan, raw: string) => string | null): Promise<string> {
   let conversation = messages;

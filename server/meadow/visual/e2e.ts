@@ -4,8 +4,10 @@ import { z } from "zod";
 import { getDb, now } from "../core/db";
 import { containsSecret } from "../core/redact";
 import { openBrowser, type CdpPage } from "./cdp";
+import { DESIGN_PROBE, designIssues, type DesignFacts } from "./design";
 
 export const E2E_FILE = "meadow.e2e.json";
+export const DESIGN_CASE = "The design holds up on a phone";
 
 const text = z.string().min(1).max(300);
 const step = z.union([
@@ -279,12 +281,15 @@ async function retry(page: CdpPage, expression: string, timeoutMs = 5000): Promi
  * Runs every test case against the app at baseUrl in a fresh headless browser that can only reach localhost.
  * A built-in "loads without errors" case always runs first.
  */
-export async function runEndToEnd(input: { browser: string; baseUrl: string; cases: TestCase[]; projectPath: string; projectId: number; phaseId: number | null; folder: string }): Promise<CaseResult[]> {
+export async function runEndToEnd(input: { browser: string; baseUrl: string; cases: TestCase[]; projectPath: string; projectId: number; phaseId: number | null; folder: string; design?: boolean }): Promise<CaseResult[]> {
   const outDir = path.join(input.projectPath, ".meadow", "screenshots", input.folder);
   fs.rmSync(outDir, { recursive: true, force: true });
   fs.mkdirSync(outDir, { recursive: true });
   const origin = new URL(input.baseUrl).origin;
-  const all: TestCase[] = [{ name: "The app loads without errors", path: "/", allowErrors: false, viewport: "desktop", steps: [{ screenshot: "Home page" }] }, ...input.cases];
+  const builtIn: TestCase[] = [{ name: "The app loads without errors", path: "/", allowErrors: false, viewport: "desktop", steps: [{ screenshot: "Home page" }] }];
+  if (input.design) builtIn.push({ name: DESIGN_CASE, path: "/", allowErrors: false, viewport: "mobile", steps: [{ screenshot: "Phone" }] });
+  const audits = new Map<number, "desktop" | "mobile">(input.design ? [[0, "desktop"], [1, "mobile"]] : []);
+  const all: TestCase[] = [...builtIn, ...input.cases];
   const results: CaseResult[] = [];
   for (const [index, item] of all.entries()) {
     const session = await openBrowser(input.browser);
@@ -345,6 +350,11 @@ export async function runEndToEnd(input: { browser: string; baseUrl: string; cas
           if (ERROR_WORDS.test(alert) && !expects.some(expected => norm(alert).includes(norm(expected)))) watch.problems.push({ kind: "Error shown on the page", detail: alert.slice(0, 400) });
         }
       }
+      const audit = audits.get(index);
+      if (audit && result.passed) {
+        const facts = await evaluate<DesignFacts | null>(page, DESIGN_PROBE).catch(() => null);
+        if (facts) for (const issue of designIssues(facts, audit)) watch.problems.push({ kind: "Design", detail: issue });
+      }
       result.problems = watch.take().map(problem => `${problem.kind}: ${problem.detail}`);
       result.problems = [...new Set(result.problems)];
       if (result.problems.length && result.passed) {
@@ -386,6 +396,7 @@ export function failureReport(results: CaseResult[], cases: TestCase[], context:
     if (failureShot) lines.push(`Screenshot: ${failureShot.path}`);
     lines.push("");
   }
+  if (failing.some(result => result.problems.some(problem => problem.startsWith("Design:")))) lines.push("The \"Design\" problems mean the UI still looks like browser defaults. Meet the design standard from your instructions: a design-token stylesheet, deliberate typography, styled controls with hover and focus states, and a layout that fits phones.", "");
   if (context.appLog.trim()) lines.push("App output (last lines):", context.appLog.trim().split("\n").slice(-40).join("\n"));
   return lines.join("\n");
 }

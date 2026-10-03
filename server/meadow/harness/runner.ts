@@ -410,7 +410,7 @@ export class Harness {
       throw new Error(`The working tree on ${project.base_branch} has uncommitted changes (${(await git.status(project.path)).slice(0, 5).map(entry => entry.path).join(", ")}). Commit or discard them, then resume.`);
     }
     if (state.engine.writeRules) {
-      state.engine.writeRules(project.path, rulesFileContent(plan, projectRules(project)));
+      state.engine.writeRules(project.path, rulesFileContent(plan, projectRules(project), project.path));
       await git.commitAll(project.path, "meadow: update engine rules");
     }
     const baseSha = await git.headSha(project.path);

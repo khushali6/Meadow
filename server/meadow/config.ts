@@ -43,9 +43,10 @@ export type MeadowConfig = {
   /**
    * autoResume: continue interrupted runs when Meadow restarts. autoVerify: after every phase, also run the
    * project's detected typecheck/lint/test/build commands that passed the baseline. preflightImpact: show the
-   * engine what a phase's changes can affect before it starts.
+   * engine what a phase's changes can affect before it starts. design: web projects get the design standard in
+   * every prompt and the browser tests fail pages that still look like browser defaults.
    */
-  harness: { maxAttempts: number; checkTimeoutS: number; massDeleteThreshold: number; phaseGate: PhaseGate; autoResume: boolean; autoVerify: boolean; preflightImpact: boolean; e2e: boolean };
+  harness: { maxAttempts: number; checkTimeoutS: number; massDeleteThreshold: number; phaseGate: PhaseGate; autoResume: boolean; autoVerify: boolean; preflightImpact: boolean; e2e: boolean; design: boolean };
   budget: { phaseTokens: number; dailyTokens: number; phaseWallClockS: number };
   /** `hosted` talks to the Meadow bot through a relay (one-click connect); `own` uses a bot token you created. */
   telegram: { mode: "hosted" | "own"; relayUrl: string; ownerId: number | null; notificationLevel: NotificationLevel; quietHours: { enabled: boolean; start: number; end: number }; voiceReplies: boolean };
@@ -98,7 +99,7 @@ export const DEFAULT_CONFIG: MeadowConfig = {
   },
   memory: { embeddings: "local", embeddingProvider: null },
   engine: { default: "cursor", model: null, models: {}, runTimeoutS: 45 * 60, noOutputTimeoutS: 5 * 60, claudeUseFreeLlmApi: false, custom: { label: "Custom command", command: "" } },
-  harness: { maxAttempts: 3, checkTimeoutS: 600, massDeleteThreshold: 20, phaseGate: "auto", autoResume: false, autoVerify: true, preflightImpact: true, e2e: true },
+  harness: { maxAttempts: 3, checkTimeoutS: 600, massDeleteThreshold: 20, phaseGate: "auto", autoResume: false, autoVerify: true, preflightImpact: true, e2e: true, design: true },
   budget: { phaseTokens: 2_000_000, dailyTokens: 20_000_000, phaseWallClockS: 90 * 60 },
   telegram: { mode: "hosted", relayUrl: "", ownerId: null, notificationLevel: "all", quietHours: { enabled: false, start: 22, end: 8 }, voiceReplies: false },
   screenshots: { enabled: true },

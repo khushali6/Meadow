@@ -5,6 +5,7 @@ import { redact, tail } from "../core/redact";
 import { untrusted, UNTRUSTED_RULE } from "../brief/brief";
 import { checkLabel, type Check, type Plan, type PlanPhase } from "../planning/format";
 import { POLICY_PROMPT } from "../guard/policy";
+import { designSection } from "./design";
 
 export const PHASE_TEMPLATE = `# Role
 You are working inside an existing git repository on a branch dedicated to this phase.
@@ -16,6 +17,7 @@ Work only inside this repository. Do not touch files outside it.
 # Constraints
 {constraints}
 {project_rules}
+{design_standard}
 
 # Project brief (whole plan and current state)
 {project_brief}
@@ -71,6 +73,7 @@ Run the failing command again and confirm it passes.
 Then run the remaining acceptance checks:
 {other_checks}
 {hint}
+{design_standard}
 {guard_feedback}`;
 
 export function loadTemplate(name: "phase" | "fix", projectPath?: string): string {
@@ -119,6 +122,7 @@ export function compilePhasePrompt(input: PhasePromptInput): string {
     goal: plan.goal,
     constraints: constraints.length ? constraints.map(item => `- ${item}`).join("\n") : "- None beyond the rules below.",
     project_rules: input.projectRules.trim() ? `\nProject rules:\n${input.projectRules.trim()}` : "",
+    design_standard: designHeading(plan, input.projectPath),
     project_brief: input.brief?.trim() || "No brief available.",
     untrusted_rule: UNTRUSTED_RULE,
     previous_phase_summaries: input.previousSummaries.length ? input.previousSummaries.map(item => `- ${item.name}: ${item.summary}`).join("\n") : "Nothing yet. This is the first phase.",
@@ -159,17 +163,25 @@ export function compileFixPrompt(input: FixPromptInput): string {
     output_tail: untrusted(tail(input.failing.output, n), "check output"),
     other_checks: others.length ? others.map(check => checkAsCommand(check, input.plan.preview?.url)).join("\n") : "- (no other checks)",
     hint: input.hint ? `\n# Hint from the user\n${input.hint}` : "",
+    design_standard: designHeading(input.plan, input.projectPath),
     guard_feedback: input.guardFeedback ? `\n# Corrections\n${input.guardFeedback}` : "",
   }));
 }
 
-export function rulesFileContent(plan: Plan, projectRules: string): string {
+function designHeading(plan: Plan, projectPath: string): string {
+  const brief = designSection(plan, projectPath);
+  return brief ? `\n# Design standard (required for every screen you touch)\n${brief}` : "";
+}
+
+export function rulesFileContent(plan: Plan, projectRules: string, projectPath = ""): string {
+  const design = projectPath ? designSection(plan, projectPath) : "";
   return [
     `Project goal: ${plan.goal}`,
     ...plan.constraints.map(item => `- ${item}`),
     projectRules.trim(),
     "- Never edit PLAN.md, SPEC.md or anything under .meadow/.",
     "- Never install packages globally or write outside this repository.",
+    design ? `\nDesign standard for every screen:\n${design}` : "",
     POLICY_PROMPT,
   ].filter(Boolean).join("\n");
 }
