@@ -287,6 +287,8 @@ export class Harness {
       try {
         this.emit(state, "message", "Generating design system", `Visual direction: "${plan.ui.prompt.slice(0, 120)}${plan.ui.prompt.length > 120 ? "…" : ""}"`);
         await generateUiDesignBrief(plan, project.path, state.abort.signal);
+        // Commit the generated design brief so the working tree is clean when phase 1 starts.
+        await git.commitAll(project.path, "meadow: generate .meadow/design.md").catch(() => undefined);
         this.emit(state, "message", "Design system ready", "Unique palette, typography and motion spec written to .meadow/design.md — all phases will follow it.");
       } catch {
         // Non-fatal — phases proceed with the universal DESIGN_STANDARD.
