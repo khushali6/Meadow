@@ -110,7 +110,11 @@ export type PhasePromptInput = {
 
 export function compilePhasePrompt(input: PhasePromptInput): string {
   const { plan, phase } = input;
-  const constraints = [...plan.constraints, ...(plan.stack.length ? [`Stack: ${plan.stack.join(", ")}`] : [])];
+  const constraints = [
+    ...plan.constraints,
+    ...(plan.stack.length ? [`Stack: ${plan.stack.join(", ")}`] : []),
+    ...(plan.services.length ? [`Services: ${plan.services.join(", ")}. Get them only through the Meadow tool request_cloud_resource; settings live in .env.local (never print or commit it).`] : []),
+  ];
   return redact(render(loadTemplate("phase", input.projectPath), {
     goal: plan.goal,
     constraints: constraints.length ? constraints.map(item => `- ${item}`).join("\n") : "- None beyond the rules below.",

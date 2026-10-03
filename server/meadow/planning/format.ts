@@ -21,6 +21,7 @@ export type Plan = {
   goal: string;
   stack: string[];
   constraints: string[];
+  services: string[];
   preview: Preview | null;
   phases: PlanPhase[];
   body: string;
@@ -31,6 +32,48 @@ export type PlanError = { line: number | null; field: string; message: string };
 export type ParseResult = { ok: true; plan: Plan; errors: []; warnings: PlanError[] } | { ok: false; plan: null; errors: PlanError[]; warnings: PlanError[] };
 
 const FRONT_MATTER = /^---\s*\n([\s\S]*?)\n---\s*(?:\n|$)/;
+export const KNOWN_SERVICES = ["supabase", "docker", "github"];
+export const MAX_PHASES = 12;
+export const SERVICES_PHASE_ID = "services";
+
+/** The built-in first phase for plans with a `services:` list: connect them through Meadow and verify locally. */
+export function servicesPhase(services: string[]): Record<string, unknown> | null {
+  const tasks: string[] = [];
+  const checks: Array<Record<string, string>> = [];
+  if (services.includes("supabase")) {
+    tasks.push(
+      "Call the Meadow tool request_cloud_resource with service supabase and action create_or_reuse_project; first gather list_organizations, list_projects and get_cost with the Supabase tools and pass them as details. Follow Meadow's reply exactly",
+      "Write SUPABASE_URL and SUPABASE_ANON_KEY to .env.local, make sure .gitignore ignores .env.local, and list both names (without values) in .env.example. Never print, cat or grep .env.local",
+      "Create the database tables the app needs with Supabase migrations (apply_migration), never by dropping existing tables",
+    );
+    checks.push(
+      { cmd: "git check-ignore -q .env.local" },
+      { cmd: "node -e \"const s=require('fs').readFileSync('.env.local','utf8');process.exit(/^SUPABASE_URL=https:\\/\\/\\S+/m.test(s)&&/^SUPABASE_ANON_KEY=\\S+/m.test(s)?0:1)\"" },
+      { cmd: "grep -q SUPABASE_URL .env.example" },
+    );
+  }
+  if (services.includes("docker")) {
+    tasks.push("Make sure Docker is running: call request_cloud_resource with service docker and action start if it isn't");
+    checks.push({ cmd: "docker info --format '{{.ServerVersion}}'" });
+  }
+  if (!tasks.length) return null;
+  return { id: SERVICES_PHASE_ID, name: "Connect services", tasks, checks, done_when: "Every service in the plan is connected and its settings are saved locally without committing secrets" };
+}
+
+/** Adds the built-in services phase at the start of a plan that lists services and doesn't have it yet. */
+export function withServicesPhase(markdown: string): string {
+  const parsed = parsePlan(markdown);
+  if (!parsed.ok || parsed.plan.phases.some(phase => phase.id === SERVICES_PHASE_ID)) return markdown;
+  const phase = servicesPhase(parsed.plan.services);
+  if (!phase) return markdown;
+  const normalized = markdown.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n");
+  const match = normalized.match(FRONT_MATTER)!;
+  const doc = parseDocument(match[1]);
+  const phases = doc.get("phases", true);
+  if (!isSeq(phases)) return markdown;
+  phases.items.unshift(doc.createNode(phase) as (typeof phases.items)[number]);
+  return `---\n${doc.toString().trimEnd()}\n---\n${normalized.slice(match[0].length)}`;
+}
 
 export function checkLabel(check: Check): string {
   if (check.kind === "cmd") return check.cmd;
@@ -94,6 +137,11 @@ export function parsePlan(markdown: string): ParseResult {
   const goal = str(data.goal, getNode(root, "goal"), "goal");
   const stack = strList(data.stack, getNode(root, "stack"), "stack");
   const constraints = strList(data.constraints, getNode(root, "constraints"), "constraints");
+  const services = [...new Set(strList(data.services, getNode(root, "services"), "services").map(name => name.trim().toLowerCase()))];
+  for (const name of services) {
+    if (!/^[a-z0-9][\w.-]{0,40}$/.test(name)) err(getNode(root, "services"), "services", `"${name}" is not a valid service name.`);
+    else if (!KNOWN_SERVICES.includes(name)) warnings.push({ line: lineOf(getNode(root, "services")), field: "services", message: `Meadow has no setup rules for "${name}"; the engine will ask you how to connect it.` });
+  }
 
   let preview: Preview | null = null;
   if (data.preview !== undefined && data.preview !== null) {
@@ -189,7 +237,8 @@ export function parsePlan(markdown: string): ParseResult {
   if (cycle) errors.push({ line: lineOf(phasesNode), field: "phases.depends_on", message: `Dependency cycle: ${cycle.join(" → ")}` });
 
   if (errors.length) return { ok: false, plan: null, errors, warnings };
-  return { ok: true, plan: { project, goal, stack, constraints, preview, phases, body: markdown.slice(match[0].length).trim() }, errors: [], warnings };
+  if (phases.length > MAX_PHASES) warnings.push({ line: lineOf(phasesNode), field: "phases", message: `${phases.length} phases is a lot; plans over ${MAX_PHASES} phases are hard to review. Consider splitting the project.` });
+  return { ok: true, plan: { project, goal, stack, constraints, services, preview, phases, body: markdown.slice(match[0].length).trim() }, errors: [], warnings };
 }
 
 export function findCycle(phases: Pick<PlanPhase, "id" | "dependsOn">[]): string[] | null {

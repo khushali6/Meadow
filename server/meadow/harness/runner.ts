@@ -9,7 +9,7 @@ import type { CaseResult } from "../visual/e2e";
 import { meadowOverlapMessage, overlapsMeadow } from "../core/self";
 import type { Engine, EngineEvent } from "../engines/base";
 import { assertSelectableEngine, getEngine } from "../engines/registry";
-import { executionOrder, type Plan, type PlanPhase } from "../planning/format";
+import { executionOrder, SERVICES_PHASE_ID, type Plan, type PlanPhase } from "../planning/format";
 import { getProject, parsedActivePlan, phasesFor, projectRules, touchProject, type PhaseRow, type ProjectRow } from "../projects";
 import { indexMemory, indexProject, promptContext } from "../rag/index";
 import { captureRoutes } from "../visual/capture";
@@ -26,6 +26,7 @@ import { runGuards } from "./guards";
 import { audit } from "../core/audit";
 import { startBrokerExecutor } from "../guard/broker";
 import { ensureGithubRepo, pushBase } from "../services/github";
+import { connectedServices } from "../services/registry";
 import { checkEngineGuards, writeEngineGuards } from "../guard/engineConfig";
 import { classifyCommand, classifyMcpCall, type Verdict } from "../guard/policy";
 import { compileFixPrompt, compilePhasePrompt, rulesFileContent } from "./prompts";
@@ -60,6 +61,7 @@ type Active = {
   engineRunKey: string | null;
   hint: string | null;
   budgetOverride: boolean;
+  servicesOverride: boolean;
   lastE2e: { results: CaseResult[]; runHow: string | null; url: string | null } | null;
 };
 
@@ -154,7 +156,7 @@ export class Harness {
     } else {
       executionId = getDb().insert("executions", { project_id: projectId, plan_id: active.row.id, status: "running", engine: engineName, tokens: 0, cost_usd: 0, started_at: now() });
     }
-    const state: Active = { executionId, projectId, engine, abort: new AbortController(), pauseRequested: false, stopRequested: false, engineRunKey: null, hint: options.hint ?? null, budgetOverride: previous?.note?.startsWith("Budget") ?? false, lastE2e: null };
+    const state: Active = { executionId, projectId, engine, abort: new AbortController(), pauseRequested: false, stopRequested: false, engineRunKey: null, hint: options.hint ?? null, budgetOverride: previous?.note?.startsWith("Budget") ?? false, servicesOverride: previous?.note?.startsWith("Services") ?? false, lastE2e: null };
     this.active.set(projectId, state);
     startBrokerExecutor();
     this.emit(state, "execution_started", `Run started on ${engine.label}`, `${active.plan.phases.length} phases · plan v${active.row.version}`);
@@ -258,6 +260,7 @@ export class Harness {
     const repo = await ensureGithubRepo(project).catch(error => ({ status: "skipped" as const, detail: `GitHub: ${(error as Error).message}`, url: undefined }));
     if (repo.status === "created") this.emit(state, "message", "Created a private GitHub repository", `${repo.detail}${repo.url ? `\n${repo.url}` : ""}`);
     const rows = phasesFor(planId);
+    if ((await this.servicesGate(state, project, plan, rows)) === "parked") return;
     const ordered = executionOrder(plan.phases);
     for (const phase of ordered) {
       const row = rows.find(item => item.phase_key === phase.id)!;
@@ -334,6 +337,32 @@ export class Harness {
     } finally {
       handle?.stop();
     }
+  }
+
+  /**
+   * Before any phase: the services the plan needs must be usable by the engine. Otherwise the run waits with a
+   * sign-in card; resuming anyway builds without them (the built-in services phase is skipped).
+   */
+  private async servicesGate(state: Active, project: ProjectRow, plan: Plan, rows: PhaseRow[]): Promise<"ok" | "parked"> {
+    const wanted = plan.services.filter(name => name !== "github");
+    const servicesRow = rows.find(item => item.phase_key === SERVICES_PHASE_ID);
+    if (!wanted.length || (servicesRow && ["passed", "skipped"].includes(servicesRow.status))) return "ok";
+    const available = await connectedServices(project.path).catch(() => []);
+    const missing = wanted.map(name => ({ name, service: available.find(item => item.name === name) })).filter(item => item.service?.status !== "ready");
+    if (!missing.length) return "ok";
+    const names = missing.map(item => item.name).join(", ");
+    if (state.servicesOverride) {
+      if (servicesRow) this.setPhase(servicesRow, { status: "skipped", summary: `Skipped: ${names} not connected`, finished_at: now() });
+      state.hint = [state.hint, `The user chose to build without ${names}. Use local alternatives (SQLite instead of Supabase, no containers instead of Docker) and say so in your report.`].filter(Boolean).join("\n");
+      this.emit(state, "message", `Building without ${names}`, "Meadow will use local alternatives.");
+      return "ok";
+    }
+    for (const { name, service } of missing) {
+      const needsLogin = service?.status === "needs_login";
+      this.emit(state, "setup", needsLogin ? `${name} needs a one-time sign-in` : `${name} isn't available`, `${service?.detail ?? `${name} isn't connected in Cursor.`} ${service?.fix ?? `Connect ${name} in Cursor Settings → MCP.`}\nThe run continues when you resume.`, { payload: { service: name, needsLogin, ok: false } });
+    }
+    this.park(state, null, "waiting", `Services: ${names} not ready. Sign in and resume, or resume to build without them.`);
+    return "parked";
   }
 
   private park(state: Active, phase: PhaseRow | null, status: "paused" | "waiting" | "blocked", note: string) {

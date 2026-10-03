@@ -1,7 +1,13 @@
 import { redact } from "../core/redact";
 import { chatJson, getLlm, type ChatMessage } from "../llm/client";
-import { formatErrors, parsePlan, type Plan } from "../planning/format";
-import { machineSummary } from "../setup/toolbox";
+import { formatErrors, MAX_PHASES, parsePlan, withServicesPhase, type Plan } from "../planning/format";
+import { servicesSummary } from "../services/registry";
+import { machineSummary as toolsSummary } from "../setup/toolbox";
+
+/** Installed tools plus connected services, so plans only use what this computer can actually reach. */
+async function machineSummary(): Promise<string> {
+  return `${await toolsSummary()}\n${await servicesSummary()}`;
+}
 
 export const INTENTS = ["new_project", "add_feature", "fix_bug", "question", "status", "control", "plan_file"] as const;
 export type Intent = (typeof INTENTS)[number];
@@ -79,6 +85,7 @@ goal: Online ordering site for a neighborhood bakery
 stack: [nextjs, typescript, sqlite]
 constraints:
   - Do not add paid services
+services: [supabase]          # only hosted services the app truly needs; omit otherwise
 preview:                      # only for web apps; omit for CLIs/libraries
   command: npm run dev
   url: http://localhost:3000
@@ -110,7 +117,10 @@ phases:
 
 const PLAN_RULES = `Rules:
 - Output a complete PLAN.md: YAML front-matter between --- lines, then optional notes. No code fences around it.
-- 2-6 phases for a new project; each phase is a coherent, independently verifiable step.
+- 2-6 phases for a simple project; up to ${MAX_PHASES} for a complex one (several services, auth, database, payments, admin areas). Each phase is a coherent, independently verifiable step.
+- services: list only hosted services the app truly needs, and only ones shown under "Connected services" (supabase for a hosted Postgres database/auth/storage, docker for containers). Otherwise use local tools (SQLite, files). Meadow adds a "Connect services" phase first by itself; don't write one, and don't create cloud resources in your tasks. Never use github in services; Meadow creates and pushes the repository.
+- Phases after services may read SUPABASE_URL and SUPABASE_ANON_KEY from .env.local at runtime; checks must not need the network unless the app does.
+
 - EVERY phase needs at least one runnable check. Check types: "cmd" (shell command, exit 0 = pass, optional expect_regex), "file_exists" (relative path), "http" (route on the preview URL returning 200; needs a preview block).
 - Prefer real build/test commands. If a phase adds behaviour, its tasks must include writing tests and its checks must run them.
 - Checks run non-interactively with CI=1: never use watch modes or commands that wait for input; dev servers are started by Meadow from the preview block, not in checks.
@@ -136,10 +146,10 @@ async function planLoop(messages: ChatMessage[], accept: (plan: Plan, raw: strin
 }
 
 export async function generatePlan(input: { spec: string; projectName: string; context: string }): Promise<string> {
-  return planLoop([
+  return withServicesPhase(await planLoop([
     { role: "system", content: `You are Meadow's planner. Turn a SPEC.md into a PLAN.md that a coding agent will execute phase by phase. Format example:\n\n${PLAN_FORMAT}\n\n${PLAN_RULES}` },
     { role: "user", content: redact(`project: ${input.projectName}\n\n${await machineSummary()}\n\nSPEC.md:\n${input.spec}\n\nProject context:\n${input.context.slice(0, 4000)}`) },
-  ], plan => (plan.project !== input.projectName ? `project must be "${input.projectName}"` : null));
+  ], plan => (plan.project !== input.projectName ? `project must be "${input.projectName}"` : plan.phases.length > MAX_PHASES ? `Use at most ${MAX_PHASES} phases; merge related steps.` : null)));
 }
 
 /** Append phases for a feature or bug to an existing plan without rewriting finished phases. */
@@ -147,7 +157,7 @@ export async function appendPhases(input: { existingPlan: string; request: strin
   const existing = parsePlan(input.existingPlan);
   if (!existing.ok) throw new Error("The current plan is invalid; fix it before adding work.");
   const keep = existing.plan.phases.map(phase => `${phase.id}:${phase.name}`);
-  return planLoop([
+  return withServicesPhase(await planLoop([
     { role: "system", content: `You are Meadow's planner. Extend an existing PLAN.md with 1-2 NEW phases appended at the end for the request. Keep every existing phase exactly as it is (same id, name, tasks, checks). New phase ids must be new.
 ${input.kind === "fix_bug" ? "This is a bug fix: the first task of the first new phase must be \"Reproduce the bug with a failing automated test\", and that phase's checks must run that test (it must pass once fixed)." : ""}
 Format example:\n\n${PLAN_FORMAT}\n\n${PLAN_RULES}` },
@@ -158,7 +168,7 @@ Format example:\n\n${PLAN_FORMAT}\n\n${PLAN_RULES}` },
     if (missing.length) return `Existing phases must be kept unchanged; missing: ${missing.join(", ")}`;
     if (plan.phases.length <= keep.length) return "Append at least one new phase for the request.";
     return null;
-  });
+  }));
 }
 
 /** Suggest missing checks for a user-provided plan. Returns a new draft; the user's file is never edited silently. */

@@ -38,7 +38,7 @@ export function parseMcpList(output: string): Record<string, ServiceStatus> {
   return statuses;
 }
 
-let mcpCache: { at: number; statuses: Record<string, ServiceStatus> } | null = null;
+let mcpCache: { at: number; binary: string; statuses: Record<string, ServiceStatus> } | null = null;
 
 async function cursorBinary() {
   return process.env.MEADOW_CURSOR_BIN || (await findBinary(["cursor-agent", "agent"]));
@@ -46,12 +46,12 @@ async function cursorBinary() {
 
 /** What the Cursor CLI (the engine) can actually use, as opposed to what the editor has connected. */
 export async function engineMcpStatus(force = false): Promise<Record<string, ServiceStatus>> {
-  if (!force && mcpCache && Date.now() - mcpCache.at < 60_000) return mcpCache.statuses;
   const binary = await cursorBinary();
   if (!binary) return {};
+  if (!force && mcpCache?.binary === binary && Date.now() - mcpCache.at < 60_000) return mcpCache.statuses;
   const result = await capture(binary, ["mcp", "list"], { cwd: os.tmpdir(), timeoutMs: 30_000 });
   const statuses = parseMcpList(`${result.stdout}\n${result.stderr}`);
-  mcpCache = { at: Date.now(), statuses };
+  mcpCache = { at: Date.now(), binary, statuses };
   return statuses;
 }
 
