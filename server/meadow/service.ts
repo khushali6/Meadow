@@ -5,6 +5,7 @@ import { listApprovals } from "./core/approvals";
 import { getDb } from "./core/db";
 import { recentEvents } from "./core/events";
 import * as git from "./core/git";
+import { ACCEPTANCE_KEY, E2E_CHECK, acceptancePhase } from "./harness/acceptance";
 import { harness, type ExecutionRow } from "./harness/runner";
 import { checkLabel, executionOrder, parsePlan, type Plan } from "./planning/format";
 import { activePlan, getProject, latestPlan, listProjects, phasesFor, planVersions, type PhaseRow, type ProjectRow } from "./projects";
@@ -25,10 +26,16 @@ function orderedPhases(projectId: number): Array<PhaseRow & { checks: string[]; 
   const parsed = parsePlan(row.raw_md);
   if (!parsed.ok) return [];
   const rows = phasesFor(row.id);
-  return executionOrder(parsed.plan.phases).map(phase => {
+  const phases = executionOrder(parsed.plan.phases).map(phase => {
     const phaseRow = rows.find(item => item.phase_key === phase.id)!;
     return { ...phaseRow, checks: phase.checks.map(checkLabel), tasks: phase.tasks, doneWhen: phase.doneWhen, dependsOn: phase.dependsOn };
   });
+  const acceptance = rows.find(item => item.phase_key === ACCEPTANCE_KEY);
+  if (acceptance) {
+    const phase = acceptancePhase(parsed.plan);
+    phases.push({ ...acceptance, checks: [...phase.checks.map(checkLabel), checkLabel(E2E_CHECK)], tasks: [phase.tasks[0], ...phase.tasks.slice(2)], doneWhen: phase.doneWhen, dependsOn: [] });
+  }
+  return phases;
 }
 
 export function statusText(projectId: number): string {

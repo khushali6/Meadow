@@ -10,7 +10,7 @@ import { PreviewHandle, startPreview } from "./preview";
 /** How to run a project so it can be opened in a browser. `how` is shown to the user as "run it yourself" instructions. */
 export type LaunchSpec =
   | { kind: "plan"; how: string; routes: string[]; plan: NonNullable<Plan["preview"]> }
-  | { kind: "command"; how: string; routes: string[]; command: string; install: string | null; port: number; readyTimeoutS: number }
+  | { kind: "command"; how: string; routes: string[]; command: string; install: string | null; port: number; readyTimeoutS: number; injectPort?: boolean }
   | { kind: "static"; how: string; routes: string[]; dir: string };
 
 const readJson = (file: string): Record<string, any> | null => {
@@ -58,7 +58,7 @@ async function nodeLaunch(root: string, port: number): Promise<LaunchSpec | null
     const bin = (await findBinary([manager])) ? manager : "npm";
     const cd = sub ? `cd ${quote(sub)} && ` : "";
     const run = bin === "yarn" ? `yarn ${script}` : `${bin} run ${script}`;
-    return { kind: "command", how: `${cd}${run}`, routes: ["/"], command: `${cd}${run}`, install: has(dir, "node_modules") ? null : `${cd}${bin} install`, port, readyTimeoutS: 180 };
+    return { kind: "command", how: `${cd}${run}`, routes: ["/"], command: `${cd}${run}`, install: has(dir, "node_modules") ? null : `${cd}${bin} install`, port, readyTimeoutS: 180, injectPort: false };
   }
   return null;
 }
@@ -169,7 +169,9 @@ export async function launchApp(spec: LaunchSpec, cwd: string, onProgress: (deta
     if (installed.exitCode !== 0) throw new Error(`${spec.install} failed:\n${installed.output.slice(-1500)}`);
   }
   onProgress(`Starting the app (${spec.how})`);
-  const child = spawnGroup(spec.command, [], { cwd, env: minimalEnv({ PORT: String(spec.port), HOST: "127.0.0.1", BROWSER: "none", NODE_ENV: "development" }), shell: true });
+  // Node apps run exactly as a person would run them, so port clashes and hardcoded ports show up here too.
+  const injectPort = spec.injectPort !== false;
+  const child = spawnGroup(spec.command, [], { cwd, env: minimalEnv({ ...(injectPort ? { PORT: String(spec.port), HOST: "127.0.0.1" } : {}), BROWSER: "none" }), shell: true });
   let output = "";
   const collect = (chunk: Buffer) => {
     output = (output + chunk.toString()).slice(-40_000);
@@ -182,7 +184,8 @@ export async function launchApp(spec: LaunchSpec, cwd: string, onProgress: (deta
   let fallback: { url: string; since: number } | null = null;
   while (Date.now() < deadline) {
     if (exited) throw new Error(`The app exited before it was ready:\n${output.slice(-2000)}`);
-    const candidates = [...printedUrls(output), `http://127.0.0.1:${spec.port}/`, `http://localhost:${spec.port}/`];
+    const mentioned = [...output.replace(/\x1b\[[0-9;]*m/g, "").matchAll(/\bport\s*:?\s*(\d{4,5})\b/gi)].map(match => `http://localhost:${match[1]}/`);
+    const candidates = [...new Set([...printedUrls(output), ...mentioned, ...(injectPort ? [`http://127.0.0.1:${spec.port}/`, `http://localhost:${spec.port}/`] : [])])];
     for (const url of candidates) {
       const result = await probe(url);
       if (result.ok && result.html) return new PreviewHandle(url, child, () => output);

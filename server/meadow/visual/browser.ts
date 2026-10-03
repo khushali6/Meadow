@@ -113,7 +113,7 @@ function run(browser: string, args: string[], timeoutMs: number, done: (stdout: 
  * Headless flags for a throwaway profile that can only reach the project's own localhost server:
  * every other host name resolves to nothing, so pages can't call out or leak anything.
  */
-function baseArgs(profile: string, viewport: Viewport): string[] {
+export function localOnlyArgs(profile: string): string[] {
   return [
     "--headless",
     "--disable-gpu",
@@ -127,10 +127,16 @@ function baseArgs(profile: string, viewport: Viewport): string[] {
     "--mute-audio",
     `--user-data-dir=${profile}`,
     "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1, EXCLUDE [::1]",
+    ...(process.platform === "linux" && typeof process.getuid === "function" && process.getuid() === 0 ? ["--no-sandbox"] : []),
+  ];
+}
+
+function baseArgs(profile: string, viewport: Viewport): string[] {
+  return [
+    ...localOnlyArgs(profile),
     `--window-size=${viewport.width},${viewport.height}`,
     `--force-device-scale-factor=${viewport.scale}`,
     "--virtual-time-budget=10000",
-    ...(process.platform === "linux" && typeof process.getuid === "function" && process.getuid() === 0 ? ["--no-sandbox"] : []),
   ];
 }
 

@@ -25,7 +25,7 @@ export function wantsEvent(event: MeadowEvent): boolean {
   if (event.type === "plan_ready" && event.payload?.status === "draft") return true;
   if (event.type === "execution_finished") return level !== "failures" || event.payload?.status !== "completed";
   if (level === "failures") return event.type === "error" && Boolean(event.executionId) && event.runId === null;
-  if (level === "phases") return ["phase_started", "phase_passed", "plan_ready", "execution_started"].includes(event.type) || (event.type === "control" && ["paused", "waiting"].includes(String(event.payload?.status)));
+  if (level === "phases") return ["phase_started", "phase_passed", "plan_ready", "execution_started"].includes(event.type) || (event.type === "check_result" && Boolean(event.payload?.e2eCase)) || (event.type === "control" && ["paused", "waiting"].includes(String(event.payload?.status)));
   return true;
 }
 
@@ -51,9 +51,15 @@ export function formatEvent(event: MeadowEvent): Outgoing | null {
       const gate = loadConfig().harness.phaseGate === "ask";
       return { text, photos, urgent: false, buttons: [[...(gate ? [{ text: "Continue", callback_data: `continue:${pid}` }] : []), { text: "Retry", callback_data: `retry:${pid}` }, { text: "Pause", callback_data: `pause:${pid}` }, { text: "Add feature", callback_data: `addfeature:${pid}` }]] };
     }
+    case "check_result": {
+      if (!p.e2eCase) return null;
+      const photos = photosFor(p.screenshotIds, `Test ${p.index}/${p.total}`);
+      return { text: `✅ ${event.title}${event.detail ? `\n${event.detail}` : ""}`, photos, urgent: false, silent: true };
+    }
     case "phase_blocked":
       return {
         text: `${event.title}\n${event.detail.slice(0, 1500)}`,
+        photos: photosFor(p.screenshotIds, "Failing test"),
         urgent: true,
         buttons: [[{ text: "Retry with hint", callback_data: `retryhint:${pid}` }, { text: "Retry", callback_data: `retry:${pid}` }], [{ text: "Skip phase", callback_data: `skip:${pid}` }, { text: "Roll back", callback_data: `rollback:${pid}` }, { text: "Stop", callback_data: `stop:${pid}` }]],
       };
@@ -69,8 +75,10 @@ export function formatEvent(event: MeadowEvent): Outgoing | null {
       if (status === "completed") {
         const photos = photosFor(p.screenshotIds, "Finished app");
         const folder = projectPath(pid);
+        const e2e = p.e2e as { passed: number; total: number } | undefined;
         const lines = [
           `🎉 ${event.title}${pid ? ` for ${safeName(pid)}` : ""}. Every phase passed its checks. The code is on the main branch of ${folder ?? "the project folder"}.`,
+          e2e ? `\n${e2e.passed}/${e2e.total} end-to-end test cases passed in a real browser. Each case's screenshots were sent above.` : "",
           p.runHow ? `\nRun it yourself:\n${folder ? `cd ${folder}\n` : ""}${p.runHow}` : "",
           photos.length ? `\nScreenshots of the running app (desktop and mobile) follow.` : "",
           event.detail ? `\n${event.detail}` : "",
@@ -144,6 +152,7 @@ const HEARTBEAT_MS = 30_000;
 
 export class Notifier {
   private queue: Outgoing[] = [];
+  private outbox: Promise<void> = Promise.resolve();
   private cards = new Map<number, LiveCard>();
   private unsubscribe: (() => void) | null = null;
   private quietTimer: NodeJS.Timeout | null = null;
@@ -169,7 +178,7 @@ export class Notifier {
 
   /** Resolves once every queued card render has been sent (used by tests and shutdown). */
   async idle() {
-    await Promise.all(Array.from(this.cards.values()).map(card => card.chain));
+    await Promise.all([this.outbox, ...Array.from(this.cards.values()).map(card => card.chain)]);
   }
 
   async dispatch(event: MeadowEvent) {
@@ -186,10 +195,17 @@ export class Notifier {
     await this.deliver(chat, card);
   }
 
-  private async deliver(chat: number, card: Outgoing) {
-    const api = this.channel.api!;
-    await api.sendMessage(chat, redact(card.text), card.buttons, { silent: card.silent });
-    if (card.photos?.length) await api.sendPhotos(chat, card.photos).catch(error => console.warn("[meadow] photo send failed", (error as Error).message));
+  /** Cards go out one at a time so a card's photos arrive before the next card. */
+  private deliver(chat: number, card: Outgoing): Promise<void> {
+    const send = async () => {
+      const api = this.channel.api;
+      if (!api) return;
+      await api.sendMessage(chat, redact(card.text), card.buttons, { silent: card.silent });
+      if (card.photos?.length) await api.sendPhotos(chat, card.photos).catch(error => console.warn("[meadow] photo send failed", (error as Error).message));
+    };
+    const next = this.outbox.then(send);
+    this.outbox = next.catch(() => undefined);
+    return next;
   }
 
   /** One progress card per running phase, created on phase start and edited in place as events arrive. */

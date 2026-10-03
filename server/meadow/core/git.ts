@@ -14,9 +14,17 @@ const GIT_ENV = {
 export class GitError extends Error {}
 
 export async function git(cwd: string, ...args: string[]): Promise<string> {
-  const result = await capture("git", args, { cwd, env: GIT_ENV, timeoutMs: 60_000 });
-  if (result.code !== 0) throw new GitError(`git ${args.join(" ")} failed: ${(result.stderr || result.stdout).trim()}`);
-  return result.stdout;
+  for (let attempt = 0; ; attempt++) {
+    const result = await capture("git", args, { cwd, env: GIT_ENV, timeoutMs: 60_000 });
+    if (result.code === 0) return result.stdout;
+    const output = (result.stderr || result.stdout).trim();
+    // A background `git status` (indexing, editors) briefly holds index.lock; wait it out instead of failing the phase.
+    if (attempt < 20 && /index\.lock': File exists/.test(output)) {
+      await new Promise(resolve => setTimeout(resolve, 150));
+      continue;
+    }
+    throw new GitError(`git ${args.join(" ")} failed: ${output}`);
+  }
 }
 
 export const DEFAULT_GITIGNORE = ["node_modules/", ".env", ".env.*", "*.pem", "*.key", "dist/", "build/", ".next/", "__pycache__/", ".venv/", ".meadow/screenshots/", ".meadow/logs/", ".DS_Store", ""].join("\n");

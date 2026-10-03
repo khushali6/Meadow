@@ -5,6 +5,7 @@ import { bus, type EventType } from "../core/events";
 import { minimalEnv } from "../core/exec";
 import * as git from "../core/git";
 import { tail } from "../core/redact";
+import type { CaseResult } from "../visual/e2e";
 import { meadowOverlapMessage, overlapsMeadow } from "../core/self";
 import type { Engine, EngineEvent } from "../engines/base";
 import { assertSelectableEngine, getEngine } from "../engines/registry";
@@ -20,6 +21,7 @@ import { liveGraph } from "../setup/live";
 import { preflightImpact } from "../setup/preflight";
 import { assertEngineReady } from "../setup/engines";
 import { autoChecks } from "../setup/verify";
+import { ACCEPTANCE_KEY, E2E_CHECK, acceptanceApplies, acceptancePhase, acceptanceRow, ensureAcceptanceRow, runAcceptance, type AcceptanceResult } from "./acceptance";
 import { runGuards } from "./guards";
 import { compileFixPrompt, compilePhasePrompt, rulesFileContent } from "./prompts";
 import { summarizePhase } from "./summarize";
@@ -53,6 +55,7 @@ type Active = {
   engineRunKey: string | null;
   hint: string | null;
   budgetOverride: boolean;
+  lastE2e: { results: CaseResult[]; runHow: string | null; url: string | null } | null;
 };
 
 type PhaseOutcome = "passed" | "blocked" | "paused" | "stopped";
@@ -146,7 +149,7 @@ export class Harness {
     } else {
       executionId = getDb().insert("executions", { project_id: projectId, plan_id: active.row.id, status: "running", engine: engineName, tokens: 0, cost_usd: 0, started_at: now() });
     }
-    const state: Active = { executionId, projectId, engine, abort: new AbortController(), pauseRequested: false, stopRequested: false, engineRunKey: null, hint: options.hint ?? null, budgetOverride: previous?.note?.startsWith("Budget") ?? false };
+    const state: Active = { executionId, projectId, engine, abort: new AbortController(), pauseRequested: false, stopRequested: false, engineRunKey: null, hint: options.hint ?? null, budgetOverride: previous?.note?.startsWith("Budget") ?? false, lastE2e: null };
     this.active.set(projectId, state);
     this.emit(state, "execution_started", `Run started on ${engine.label}`, `${active.plan.phases.length} phases · plan v${active.row.version}`);
     this.loop(state, project, active.plan, active.row.id).catch(error => {
@@ -214,7 +217,8 @@ export class Harness {
     if (!active) return undefined;
     const rows = phasesFor(active.row.id);
     const order = executionOrder(active.plan.phases).map(phase => rows.find(row => row.phase_key === phase.id)!);
-    return order.find(row => row && !["passed", "skipped"].includes(row.status));
+    const acceptance = acceptanceRow(active.row.id);
+    return [...order, ...(acceptance ? [acceptance] : [])].find(row => row && !["passed", "skipped"].includes(row.status));
   }
 
   private emit(state: Active, type: EventType, title: string, detail = "", extra: { runId?: number | null; phaseId?: number | null; payload?: Record<string, unknown> } = {}) {
@@ -264,8 +268,39 @@ export class Harness {
         return this.park(state, null, "waiting", "Phase passed. Waiting for you to continue.");
       }
     }
+    const accepted = await this.acceptance(state, project, plan, planId, ordered);
+    if (accepted === "stopped") return this.finish(state, "stopped", null);
+    if (accepted === "paused" || accepted === "blocked") return;
+    if (accepted === "passed" && state.lastE2e) {
+      const { results, runHow, url } = state.lastE2e;
+      return this.finish(state, "completed", nextRecommendation(project.id), { screenshotIds: [], runHow, url, e2e: { passed: results.filter(result => result.passed).length, total: results.length } });
+    }
     const showcase = await this.showcase(state, project, plan);
     this.finish(state, "completed", nextRecommendation(project.id), showcase);
+  }
+
+  /**
+   * After the plan's phases: run the whole app in a real browser, click through every main flow, and hand any
+   * error back to the engine. Only a fully passing run sends screenshots to the user.
+   */
+  private async acceptance(state: Active, project: ProjectRow, plan: Plan, planId: number, ordered: PlanPhase[]): Promise<PhaseOutcome | "skipped"> {
+    if (!loadConfig().harness.e2e) return "skipped";
+    const applies = await acceptanceApplies(project.path, plan);
+    if ("reason" in applies) {
+      this.emit(state, "message", "End-to-end browser tests skipped", applies.reason);
+      return "skipped";
+    }
+    const row = await ensureAcceptanceRow(planId, project.path, project.base_branch);
+    if (row.status === "skipped") return "skipped";
+    if (row.status === "passed") return "passed";
+    if (state.stopRequested) return "stopped";
+    if (state.pauseRequested) {
+      this.park(state, row, "paused", "Paused before the end-to-end tests.");
+      return "paused";
+    }
+    getDb().update("executions", state.executionId, { current_phase_id: row.id });
+    const phase = acceptancePhase(plan);
+    return this.runPhase(state, project, plan, phase, row, [...ordered, phase]);
   }
 
   /** The finished app, running, as a person would see it: desktop and mobile screenshots plus how to run it. */
@@ -446,7 +481,9 @@ export class Harness {
         // No graph yet: the phase runs without an impact section.
       }
     }
+    const isAcceptance = phase.id === ACCEPTANCE_KEY;
     const extraChecks = autoChecks(project.id, phase.checks);
+    let e2e: AcceptanceResult | null = null;
     let preview: PreviewHandle | null = null;
     const needsPreview = Boolean(plan.preview && phase.checks.some(check => check.kind === "http"));
 
@@ -475,7 +512,7 @@ export class Harness {
           const context = [impactText, await promptContext(project.id, project.path, `${phase.name} ${phase.tasks.join(" ")}`)].filter(Boolean).join("\n\n");
           const brief = projectBrief(project.id, lastFailure ? 2500 : 6000, phase.id);
           const prompt = lastFailure
-            ? compileFixPrompt({ plan, phase, projectPath: project.path, failing: { check: lastFailure.check, exitCode: lastFailure.exitCode, output: lastFailure.output }, hint: state.hint ?? undefined, guardFeedback, brief, attempt: { n: attemptsThisRun, max: config.harness.maxAttempts } })
+            ? compileFixPrompt({ plan, phase, projectPath: project.path, failing: { check: lastFailure.check, exitCode: lastFailure.exitCode, output: lastFailure.output }, hint: state.hint ?? undefined, guardFeedback, brief, attempt: { n: attemptsThisRun, max: config.harness.maxAttempts }, tailLines: lastFailure.check === E2E_CHECK ? 220 : undefined })
             : compilePhasePrompt({ plan, phase, projectPath: project.path, projectRules: projectRules(project), previousSummaries, context, brief, guardFeedback: [guardFeedback, state.hint ? `Hint from the user: ${state.hint}` : ""].filter(Boolean).join("\n") });
           const hintUsed = state.hint;
           state.hint = null;
@@ -549,27 +586,43 @@ export class Harness {
           this.setPhase(row, { status: "stopped" });
           return "stopped";
         }
-        const failing = outcomes.find(outcome => !outcome.passed) ?? null;
+        let failing = outcomes.find(outcome => !outcome.passed) ?? null;
+        e2e = null;
+        if (isAcceptance && !failing && !guards.blocking) {
+          preview?.stop();
+          preview = null;
+          e2e = await runAcceptance({ projectPath: project.path, projectId: project.id, phaseId: row.id, plan, baseSha, folder: `e2e-${row.id}-${row.attempts}`, onProgress: (title, detail) => this.emit(state, "message", title, detail, { phaseId: row.id }) });
+          if (state.stopRequested) {
+            this.setPhase(row, { status: "stopped" });
+            return "stopped";
+          }
+          const result = e2e.outcome;
+          getDb().insert("checks", { phase_id: row.id, run_id: null, label: result.label, command: result.label, exit_code: result.exitCode, passed: result.passed ? 1 : 0, output_tail: tail(result.output, 80), duration_ms: result.durationMs, ts: now() });
+          for (const item of e2e.results) this.emit(state, "check_result", `${item.passed ? "✓" : "✗"} ${item.name}`, item.passed ? "passed in the browser" : item.failure ?? "failed", { phaseId: row.id, payload: { passed: item.passed, exitCode: item.passed ? 0 : 1 } });
+          this.emit(state, "check_result", `${result.passed ? "✓" : "✗"} ${result.label}`, result.passed ? result.output : tail(result.output, 12), { phaseId: row.id, payload: { passed: result.passed, exitCode: result.exitCode } });
+          outcomes.push(result);
+          if (!result.passed) failing = result;
+        }
 
         if (!failing && !guards.blocking) {
           preview?.stop();
           preview = null;
-          await this.pass(state, project, plan, phase, row, phaseNumber, ordered.length, baseSha, outcomes, guards.dependencyChanges, engineReport);
+          await this.pass(state, project, plan, phase, row, phaseNumber, ordered.length, baseSha, outcomes, guards.dependencyChanges, engineReport, e2e);
           return "passed";
         }
 
         lastFailure = failing ?? lastFailure;
-        if (failing && plan.preview && preview && project.screenshots && config.screenshots.enabled) {
+        if (failing && !isAcceptance && plan.preview && preview && project.screenshots && config.screenshots.enabled) {
           await this.screenshots(state, project, plan, row, `phase-${phase.id}-failure`, ["/"], ["desktop"]);
         }
-        const signature = failing ? `${failing.label}:${tail(failing.output, 15).replace(/\d+(\.\d+)?m?s\b/g, "")}` : `guards:${guardFeedback}`;
+        const signature = failing ? (failing.check === E2E_CHECK && e2e ? `e2e:${e2e.signature}` : `${failing.label}:${tail(failing.output, 15).replace(/\d+(\.\d+)?m?s\b/g, "")}`) : `guards:${guardFeedback}`;
         const sameError = signature === lastSignature;
         lastSignature = signature;
         const exhausted = attemptsThisRun >= config.harness.maxAttempts;
         const stuck = (sameError && attemptsThisRun >= 2) || noChangeStreak >= 2;
         if (exhausted || stuck) {
           const why = exhausted ? `after ${attemptsThisRun} attempt${attemptsThisRun === 1 ? "" : "s"}` : sameError ? "(same error twice in a row)" : "(no file changes across two fix attempts)";
-          return this.block(state, row, phase, phaseNumber, ordered.length, why, failing);
+          return this.block(state, row, phase, phaseNumber, ordered.length, why, failing, e2e ? e2e.results.filter(item => !item.passed).flatMap(item => item.screenshots.slice(-1).map(shot => shot.id)) : []);
         }
         this.emit(state, "message", attemptsThisRun === 0 ? "The branch does not pass its checks yet; starting a fix attempt" : `Attempt ${attemptsThisRun} failed; starting fix attempt ${attemptsThisRun + 1}`, failing ? `${failing.label} exited ${failing.exitCode ?? "without a code"}` : guardFeedback.split("\n")[0], { phaseId: row.id });
       }
@@ -578,10 +631,10 @@ export class Harness {
     }
   }
 
-  private block(state: Active, row: PhaseRow, phase: PlanPhase, phaseNumber: number, total: number, why: string, failing: CheckOutcome | null): PhaseOutcome {
+  private block(state: Active, row: PhaseRow, phase: PlanPhase, phaseNumber: number, total: number, why: string, failing: CheckOutcome | null, screenshotIds: number[] = []): PhaseOutcome {
     this.setPhase(row, { status: "blocked" });
-    const lastError = failing ? tail(failing.output, 6) : why;
-    this.emit(state, "phase_blocked", `Phase ${phaseNumber} is stuck ${why}: ${phase.name}`, failing ? `Failing: ${failing.label} (exit ${failing.exitCode ?? "n/a"})\n${lastError}` : why, { phaseId: row.id, payload: { phaseNumber, total, failing: failing?.label ?? null, exitCode: failing?.exitCode ?? null, lastError, attempts: row.attempts } });
+    const lastError = failing ? (failing.check === E2E_CHECK ? failing.output.split("\n").filter(line => /^(##|Failed at|Reason:)/.test(line)).slice(0, 12).join("\n") || tail(failing.output, 6) : tail(failing.output, 6)) : why;
+    this.emit(state, "phase_blocked", `Phase ${phaseNumber} is stuck ${why}: ${phase.name}`, failing ? `Failing: ${failing.label} (exit ${failing.exitCode ?? "n/a"})\n${lastError}` : why, { phaseId: row.id, payload: { phaseNumber, total, failing: failing?.label ?? null, exitCode: failing?.exitCode ?? null, lastError, attempts: row.attempts, screenshotIds } });
     this.park(state, row, "blocked", `Phase ${phaseNumber} blocked ${why}.`);
     return "blocked";
   }
@@ -603,11 +656,11 @@ export class Harness {
     }
   }
 
-  private async pass(state: Active, project: ProjectRow, plan: Plan, phase: PlanPhase, row: PhaseRow, phaseNumber: number, total: number, baseSha: string, outcomes: CheckOutcome[], dependencyChanges: string[], engineReport: string) {
+  private async pass(state: Active, project: ProjectRow, plan: Plan, phase: PlanPhase, row: PhaseRow, phaseNumber: number, total: number, baseSha: string, outcomes: CheckOutcome[], dependencyChanges: string[], engineReport: string, e2e: AcceptanceResult | null = null) {
     const diff = await git.diffStat(project.path, baseSha);
     const config = loadConfig();
     let shotIds: number[] = [];
-    if (plan.preview && project.screenshots && config.screenshots.enabled) {
+    if (!e2e && plan.preview && project.screenshots && config.screenshots.enabled) {
       shotIds = (await this.screenshots(state, project, plan, row, `phase-${phase.id}`)).map(shot => shot.id);
     }
     const summary = await summarizePhase(phase, diff, outcomes, engineReport);
@@ -621,6 +674,13 @@ export class Harness {
       phaseId: row.id,
       payload: { phaseNumber, total, checks: outcomes.map(outcome => outcome.label), files: diff.length, additions, deletions, dependencyChanges, screenshotIds: shotIds, commit: sha.slice(0, 10) },
     });
+    if (e2e) {
+      state.lastE2e = { results: e2e.results, runHow: e2e.runHow, url: e2e.url };
+      e2e.results.forEach((result, index) => {
+        for (const shot of result.screenshots) this.emit(state, "screenshot", `Final screenshot ${result.name} · ${shot.label}`, shot.path, { phaseId: row.id, payload: { screenshotId: shot.id, final: true, e2e: true } });
+        this.emit(state, "check_result", `Test case ${index + 1} of ${e2e.results.length}: ${result.name}`, result.pageText.replace(/\s+/g, " ").slice(0, 300), { phaseId: row.id, payload: { passed: true, exitCode: 0, e2eCase: true, case: result.name, index: index + 1, total: e2e.results.length, screenshotIds: result.screenshots.map(shot => shot.id) } });
+      });
+    }
     indexMemory(project.id, `phase ${phase.id} summary`, `${phase.name}: ${summary}`).catch(() => undefined);
     liveGraph
       .refresh(project.id, `phase ${phase.id} passed`, { forceGraph: true })
