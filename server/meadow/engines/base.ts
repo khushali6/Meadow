@@ -1,4 +1,4 @@
-export type EngineEventType = "session_started" | "thinking" | "message" | "tool_call" | "file_edit" | "command_run" | "usage" | "error" | "done";
+export type EngineEventType = "session_started" | "thinking" | "message" | "tool_call" | "file_edit" | "command_run" | "usage" | "error" | "done" | "console_line";
 
 export type EngineEvent = {
   type: EngineEventType;

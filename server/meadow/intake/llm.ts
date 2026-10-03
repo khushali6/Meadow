@@ -1,5 +1,7 @@
 import { redact } from "../core/redact";
 import { chatJson, getLlm, type ChatMessage } from "../llm/client";
+import { loadConfig } from "../config";
+import { runCursorPlanner } from "../llm/cursorPlanner";
 import { formatErrors, MAX_PHASES, parsePlan, withServicesPhase, type Plan } from "../planning/format";
 import { servicesSummary } from "../services/registry";
 import { machineSummary as toolsSummary } from "../setup/toolbox";
@@ -71,11 +73,17 @@ export const SPEC_TEMPLATE = `# <Project name>
 ## Open questions`;
 
 export async function buildSpec(input: { request: string; answers: Array<{ question: string; answer: string; assumed: boolean }>; context: string; projectName: string; existingSpec?: string | null }): Promise<string> {
-  const reply = await getLlm().chat([
-    { role: "system", content: `You write SPEC.md files for small software projects. Use exactly this structure and headings:\n\n${SPEC_TEMPLATE}\n\nRules: concise bullet points; free and local services only unless the user asked otherwise; every answer marked "assumed" must appear under "Assumptions (made without asking)". Reply with the Markdown only.` },
-    { role: "user", content: redact(`Project name: ${input.projectName}\n\nRequest:\n${input.request}\n\nAnswers:\n${input.answers.map(a => `- ${a.question}: ${a.answer}${a.assumed ? " (assumed)" : ""}`).join("\n") || "- none"}\n\nProject context:\n${input.context.slice(0, 5000)}${input.existingSpec ? `\n\nExisting SPEC.md (extend it, keep what still applies):\n${input.existingSpec.slice(0, 4000)}` : ""}`) },
-  ], { maxTokens: 1800 });
-  const text = reply.text.replace(/^```(?:markdown|md)?\s*/i, "").replace(/```\s*$/, "").trim();
+  const system = `You write SPEC.md files for small software projects. Use exactly this structure and headings:\n\n${SPEC_TEMPLATE}\n\nRules: concise bullet points; free and local services only unless the user asked otherwise; every answer marked "assumed" must appear under "Assumptions (made without asking)". Reply with the Markdown only.`;
+  const user = redact(`Project name: ${input.projectName}\n\nRequest:\n${input.request}\n\nAnswers:\n${input.answers.map(a => `- ${a.question}: ${a.answer}${a.assumed ? " (assumed)" : ""}`).join("\n") || "- none"}\n\nProject context:\n${input.context.slice(0, 5000)}${input.existingSpec ? `\n\nExisting SPEC.md (extend it, keep what still applies):\n${input.existingSpec.slice(0, 4000)}` : ""}`);
+  let text: string;
+  if (useCursorPlanner()) {
+    const result = await runCursorPlanner(`${system}\n\n---\n\n${user}`);
+    text = result.ok ? result.text : (await getLlm().chat([{ role: "system", content: system }, { role: "user", content: user }], { maxTokens: 1800 })).text;
+  } else {
+    const reply = await getLlm().chat([{ role: "system", content: system }, { role: "user", content: user }], { maxTokens: 1800 });
+    text = reply.text;
+  }
+  text = text.replace(/^```(?:markdown|md)?\s*/i, "").replace(/```\s*$/, "").trim();
   return text.startsWith("#") ? text : `# ${input.projectName}\n\n${text}`;
 }
 
@@ -147,11 +155,56 @@ async function planLoop(messages: ChatMessage[], accept: (plan: Plan, raw: strin
   throw new Error(`The planner could not produce a valid plan after 3 attempts:\n${lastErrors}`);
 }
 
+/**
+ * Like planLoop but calls the Cursor CLI in read-only mode (ask) instead of the local LLM.
+ * Cursor gets the full system + user prompt as one string; its response is validated the same way.
+ */
+async function cursorPlanLoop(systemPrompt: string, userPrompt: string, accept: (plan: Plan, raw: string) => string | null): Promise<string> {
+  let lastErrors = "";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const fixNote = lastErrors ? `\n\nThe previous attempt was invalid:\n${lastErrors}\n\nReply with the full corrected PLAN.md only.` : "";
+    const fullPrompt = `${systemPrompt}\n\n---\n\n${userPrompt}${fixNote}`;
+    const result = await runCursorPlanner(fullPrompt);
+    if (!result.ok) throw new Error(`Cursor planner failed: ${result.error ?? "no output"}`);
+    const raw = result.text.replace(/^```(?:markdown|md|yaml)?\s*\n/i, "").replace(/\n```\s*$/, "").trim() + "\n";
+    const parsed = parsePlan(raw);
+    const extra = parsed.ok ? accept(parsed.plan, raw) : null;
+    if (parsed.ok && !extra) return raw;
+    lastErrors = parsed.ok ? extra! : formatErrors(parsed.errors);
+  }
+  throw new Error(`The Cursor planner could not produce a valid plan after 3 attempts:\n${lastErrors}`);
+}
+
+/** Whether to use Cursor for planning (spec + plan) or the local LLM. Disabled in test environments. */
+function useCursorPlanner(): boolean {
+  if (process.env.VITEST || process.env.CI) return false;
+  return (loadConfig().llm.plannerEngine ?? "engine") === "engine";
+}
+
 export async function generatePlan(input: { spec: string; projectName: string; context: string }): Promise<string> {
-  return withServicesPhase(await planLoop([
-    { role: "system", content: `You are Meadow's planner. Turn a SPEC.md into a PLAN.md that a coding agent will execute phase by phase. Format example:\n\n${PLAN_FORMAT}\n\n${PLAN_RULES}` },
-    { role: "user", content: redact(`project: ${input.projectName}\n\n${await machineSummary()}\n\nSPEC.md:\n${input.spec}\n\nProject context:\n${input.context.slice(0, 4000)}`) },
-  ], plan => (plan.project !== input.projectName ? `project must be "${input.projectName}"` : plan.phases.length > MAX_PHASES ? `Use at most ${MAX_PHASES} phases; merge related steps.` : null)));
+  const system = `You are Meadow's planner. Turn a SPEC.md into a PLAN.md that a coding agent will execute phase by phase. Format example:\n\n${PLAN_FORMAT}\n\n${PLAN_RULES}`;
+  const user = redact(`project: ${input.projectName}\n\n${await machineSummary()}\n\nSPEC.md:\n${input.spec}\n\nProject context:\n${input.context.slice(0, 4000)}`);
+  const accept = (plan: Plan): string | null => plan.project !== input.projectName ? `project must be "${input.projectName}"` : plan.phases.length > MAX_PHASES ? `Use at most ${MAX_PHASES} phases; merge related steps.` : null;
+  if (useCursorPlanner()) {
+    try {
+      return withServicesPhase(await cursorPlanLoop(system, user, accept));
+    } catch (error) {
+      // cursor-agent not available or timed out: fall back to the local LLM so the user always gets a plan.
+      const msg = (error as Error).message ?? "";
+      if (!msg.includes("cursor-agent not found") && !msg.includes("timed out") && !msg.includes("failed:")) throw error;
+    }
+  }
+  // Local LLM path: auto-improve the plan's checks before presenting it (skip in test environments).
+  const raw = await planLoop([{ role: "system", content: system }, { role: "user", content: user }], accept);
+  if (!process.env.VITEST && !process.env.CI) {
+    try {
+      const improved = await improvePlan(raw);
+      return withServicesPhase(improved);
+    } catch {
+      // Improvement failed (LLM unavailable, invalid output, etc.); the validated plan is good enough.
+    }
+  }
+  return withServicesPhase(raw);
 }
 
 /** Append phases for a feature or bug to an existing plan without rewriting finished phases. */

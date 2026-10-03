@@ -54,6 +54,8 @@ export class Supervisor {
 
     const emitLine = (line: string) => {
       if (!line.trim()) return;
+      // Always emit the raw line so the dashboard can show a live console.
+      queue.push({ type: "console_line", title: line.slice(0, 2000) });
       let events: EngineEvent[] = [];
       try {
         events = parse(line);

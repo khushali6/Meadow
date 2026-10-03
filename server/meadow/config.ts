@@ -14,6 +14,12 @@ export type MeadowConfig = {
   llm: {
     /** Provider used by the agent for chat (planning, questions, summaries, CodeAtlas). */
     provider: ProviderId;
+    /**
+     * Which model is used for generating SPEC.md and PLAN.md.
+     * "engine": delegate to the coding engine (Cursor CLI in read-only mode) so a top-tier model writes the plan.
+     * "llm": use the chat provider above (the old behaviour).
+     */
+    plannerEngine: "engine" | "llm";
     /** FreeLLMAPI settings (kept at this level for older configs). */
     baseUrl: string;
     model: string;
@@ -88,6 +94,7 @@ export const DEFAULT_CONFIG: MeadowConfig = {
   server: { host: "127.0.0.1", port: 7777 },
   llm: {
     provider: "freellmapi",
+    plannerEngine: "engine",
     baseUrl: "http://127.0.0.1:3001/v1",
     model: "auto",
     embeddingModel: "auto",

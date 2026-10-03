@@ -5,7 +5,7 @@ import { getDb } from "../core/db";
 import { getProject } from "../projects";
 import { requestCloudResource } from "../services/cloud";
 import { connectedServices } from "../services/registry";
-import { askHuman, requestSystemAction } from "./broker";
+import { askHuman, notifyHuman, requestSystemAction } from "./broker";
 
 const text = (value: unknown) => ({ content: [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value, null, 2) }] });
 const failure = (error: unknown) => ({ ...text(`Error: ${(error as Error).message}`), isError: true });
@@ -22,7 +22,20 @@ export async function startBrokerServer() {
   if (!Number.isInteger(projectId) || projectId <= 0) throw new Error("MEADOW_BROKER_PROJECT is not set.");
   const project = getProject(projectId);
   const server = new McpServer({ name: "meadow", version: "1.0.0" }, {
-    instructions: `Meadow supervises this run for ${project.name}. Use ask_human when you truly need a decision only the user can make, request_system_action for anything outside the project folder (system installs, Docker, deploys, pushes), request_cloud_resource before creating any cloud resource, and connected_services to see what is available. Never try to work around a refusal.`,
+    instructions: `Meadow supervises this run for ${project.name}. Tools: notify_human (status update, milestone, one-way — no reply needed), ask_human (decision you cannot make yourself — waits for answer), request_system_action (anything outside the project: brew, Docker, deploys, pushes), request_cloud_resource (before creating any cloud resource), connected_services (what is available). Never try to work around a refusal.`,
+  });
+
+  server.registerTool("notify_human", {
+    title: "Notify the user",
+    description: "Sends a one-way message to the user on Telegram and the Meadow dashboard. Use for status updates, milestones or non-blocking information. Does NOT wait for a reply — if you need a decision, use ask_human instead.",
+    inputSchema: { message: z.string().min(3).max(1500) },
+  }, async args => {
+    try {
+      notifyHuman({ projectId, message: args.message });
+      return text("Notification sent.");
+    } catch (error) {
+      return failure(error);
+    }
   });
 
   server.registerTool("ask_human", {

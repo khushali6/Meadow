@@ -10,6 +10,8 @@ export const EVENT_TYPES = [
   "phase_started", "check_result", "phase_passed", "phase_blocked", "approval_requested", "approval_decided",
   "screenshot", "execution_started", "execution_finished", "plan_ready", "control", "guard",
   "atlas_trace", "atlas_ingest", "memory", "audit", "impact", "setup", "health",
+  /** Raw stdout line from the coding engine, streamed to the dashboard live console; never stored in the DB. */
+  "console_line",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -55,6 +57,12 @@ class EventBus extends EventEmitter {
     const title = redact(input.title).slice(0, 300);
     const detail = redact(input.detail ?? "").slice(0, 4000);
     const payload = input.payload ? JSON.parse(redact(JSON.stringify(input.payload))) : undefined;
+    // console_line is transient: broadcast on the bus but never written to the DB or JSONL log.
+    if (input.type === "console_line") {
+      const event: MeadowEvent = { id: 0, ts, type: "console_line", title, detail, payload, projectId: input.projectId ?? null, executionId: input.executionId ?? null, runId: input.runId ?? null, phaseId: input.phaseId ?? null };
+      this.emit("event", event);
+      return event;
+    }
     const id = getDb().insert("events", {
       project_id: input.projectId ?? null,
       execution_id: input.executionId ?? null,

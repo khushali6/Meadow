@@ -7,12 +7,12 @@ import { bus, type MeadowEvent } from "../core/events";
 import { findBinary, minimalEnv } from "../core/exec";
 import { getProject, type ProjectRow } from "../projects";
 
-const LOGGED = new Set(["execution_started", "execution_finished", "phase_started", "session_started", "thinking", "message", "tool_call", "file_edit", "command_run", "check_result", "guard", "error", "phase_passed", "phase_blocked", "control", "approval_requested"]);
+const LOGGED = new Set(["execution_started", "execution_finished", "phase_started", "session_started", "thinking", "message", "tool_call", "file_edit", "command_run", "check_result", "guard", "error", "phase_passed", "phase_blocked", "control", "approval_requested", "console_line"]);
 
 const LABELS: Record<string, string> = {
   execution_started: "RUN   ", execution_finished: "RUN   ", phase_started: "PHASE ", session_started: "ENGINE", thinking: "THINK ",
   message: "SAY   ", tool_call: "TOOL  ", file_edit: "EDIT  ", command_run: "SHELL ", check_result: "CHECK ", guard: "GUARD ",
-  error: "ERROR ", phase_passed: "PASS  ", phase_blocked: "BLOCK ", control: "RUN   ", approval_requested: "ASK   ",
+  error: "ERROR ", phase_passed: "PASS  ", phase_blocked: "BLOCK ", control: "RUN   ", approval_requested: "ASK   ", console_line: "RAW>  ",
 };
 
 export function liveLogPath(project: Pick<ProjectRow, "name">): string {
@@ -21,6 +21,8 @@ export function liveLogPath(project: Pick<ProjectRow, "name">): string {
 
 export function formatLiveLine(event: MeadowEvent): string | null {
   if (!LOGGED.has(event.type)) return null;
+  // Raw engine lines go to the log without a timestamp so they look like live terminal output.
+  if (event.type === "console_line") return `RAW>  ${event.title}\n`;
   const time = new Date(event.ts).toLocaleTimeString([], { hour12: false });
   const detail = event.detail.split("\n").map(line => line.trim()).find(Boolean)?.slice(0, 200) ?? "";
   const rule = event.type === "phase_started" || event.type === "execution_started" ? `\n${"─".repeat(72)}\n` : "";

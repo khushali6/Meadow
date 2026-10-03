@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadConfig, meadowHome } from "../config";
+import { getSecret, loadConfig, meadowHome } from "../config";
 import { capture } from "../core/exec";
 import { meadowInstallRoot } from "../core/self";
 import { cliPermissions } from "./policy";
@@ -34,6 +34,22 @@ function excludeLocally(cwd: string, files: string[]) {
   if (missing.length) fs.appendFileSync(exclude, `${current && !current.endsWith("\n") ? "\n" : ""}# Meadow engine guardrails (local only)\n${missing.join("\n")}\n`);
 }
 
+/**
+ * Returns a GitHub MCP server entry for the engine, or null when GitHub is not configured.
+ * Uses Cursor's built-in github MCP (command "github-mcp-server" or via npx).
+ * The token is never written into the JSON; it's injected via env on every run.
+ */
+function githubMcpEntry(): Record<string, unknown> | null {
+  const token = getSecret("GITHUB_TOKEN");
+  if (!token) return null;
+  // Use the official GitHub MCP server; it's distributed as a Node package that Cursor ships.
+  return {
+    command: "npx",
+    args: ["-y", "@modelcontextprotocol/server-github"],
+    env: { GITHUB_PERSONAL_ACCESS_TOKEN: token },
+  };
+}
+
 function expectedMcp(cwd: string, projectId: number): Record<string, unknown> | null {
   const entry = brokerEntry(projectId);
   if (!entry) return null;
@@ -43,7 +59,13 @@ function expectedMcp(cwd: string, projectId: number): Record<string, unknown> | 
   } catch {
     // None yet, or unreadable: Meadow writes a fresh one.
   }
-  return { ...existing, mcpServers: { ...(existing.mcpServers ?? {}), meadow: entry } };
+  const servers: Record<string, unknown> = { ...(existing.mcpServers ?? {}), meadow: entry };
+  // Inject the GitHub MCP when a token is present and the user hasn't already wired one.
+  if (!servers.github) {
+    const gh = githubMcpEntry();
+    if (gh) servers.github = gh;
+  }
+  return { ...existing, mcpServers: servers };
 }
 
 export type GuardFiles = { brokerAvailable: boolean; notes: string[] };

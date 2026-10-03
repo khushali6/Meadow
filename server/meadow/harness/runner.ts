@@ -527,6 +527,11 @@ export class Harness {
 
   private recordEngineEvent(state: Active, runId: number, phaseId: number, event: EngineEvent) {
     if (event.type === "usage") return;
+    // console_line: emit as a lightweight event for live streaming; never stored in the DB.
+    if (event.type === "console_line") {
+      this.emit(state, "console_line", event.title, "", { runId, phaseId });
+      return;
+    }
     this.emit(state, event.type, event.title, event.detail ?? "", { runId, phaseId, payload: event.reason ? { reason: event.reason } : undefined });
   }
 

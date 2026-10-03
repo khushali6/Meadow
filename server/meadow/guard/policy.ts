@@ -70,11 +70,15 @@ export function classifyCommand(command: string, projectPath: string): Verdict {
 /** Destructive MCP tools the engine may never call; Meadow's broker handles creation with cost checks. */
 export const DENIED_MCP_TOOLS: Record<string, string[]> = {
   supabase: ["delete_project", "pause_project", "restore_project", "delete_branch", "reset_branch", "merge_branch", "rebase_branch", "create_branch"],
+  // GitHub: deleting repos, force-pushing and secrets manipulation are never allowed through the engine.
+  github: ["delete_repository", "update_file", "push_files", "create_or_update_file", "delete_file", "set_secret", "delete_secret", "merge_pull_request"],
 };
 
 /** MCP tools the engine may only call after Meadow's broker approved it (request_cloud_resource); checked after each run. */
 export const BROKERED_MCP_TOOLS: Record<string, { tool: string; brokerAudit: string }[]> = {
   supabase: [{ tool: "create_project", brokerAudit: "broker.cloud.supabase.create_project" }],
+  // GitHub: creating repos must go through the broker so Meadow's guardrails (private-only, no force) apply.
+  github: [{ tool: "create_repository", brokerAudit: "broker.cloud.github.create_repository" }],
 };
 
 /**
@@ -108,10 +112,12 @@ export function cliPermissions(): { permissions: { allow: string[]; deny: string
   const readDeny = ["~/.ssh/**", "~/.aws/**", "~/.gnupg/**", "~/.meadow/**", "~/.config/gh/**", "~/.netrc", "~/.npmrc", "~/.docker/config.json", "~/Library/Keychains/**", "~/.cursor/mcp.json", "~/.cursor/cli-config.json", "**/.env", "**/.env.local", "**/.env.production", "**/*.pem", "**/id_rsa", "**/id_ed25519"];
   const writeDeny = ["~/.ssh/**", "~/.meadow/**", "~/.zshrc", "~/.bashrc", "~/.bash_profile", "~/.profile", "~/.gitconfig", "~/Library/LaunchAgents/**", "PLAN.md", "SPEC.md", ".meadow/**", ".cursor/cli.json", ".cursor/mcp.json", ".git/**"];
   const mcpDeny = Object.entries(DENIED_MCP_TOOLS).flatMap(([server, tools]) => tools.map(tool => `Mcp(${server}:${tool})`));
+  // Also deny the short-name variants the GitHub MCP may expose.
+  const githubExtra = ["Mcp(github:delete_repository)", "Mcp(github:push_files)", "Mcp(github:set_secret)", "Mcp(github:delete_secret)", "Mcp(github:merge_pull_request)"];
   return {
     permissions: {
-      allow: ["Shell(ls)", "Shell(cat)", "Shell(node)", "Shell(npm)", "Shell(pnpm)", "Shell(yarn)", "Shell(npx)", "Shell(git status)", "Shell(git diff)", "Shell(git log)", "Mcp(meadow:*)"],
-      deny: [...shellDeny.map(name => `Shell(${name})`), ...readDeny.map(glob => `Read(${glob.replace(/^~/, home)})`), ...writeDeny.map(glob => `Write(${glob.replace(/^~/, home)})`), ...mcpDeny],
+      allow: ["Shell(ls)", "Shell(cat)", "Shell(node)", "Shell(npm)", "Shell(pnpm)", "Shell(yarn)", "Shell(npx)", "Shell(git status)", "Shell(git diff)", "Shell(git log)", "Mcp(meadow:*)", "Mcp(github:get_*)", "Mcp(github:list_*)", "Mcp(github:search_*)", "Mcp(github:create_issue)", "Mcp(github:create_pull_request)", "Mcp(github:get_pull_request)", "Mcp(github:list_pull_requests)"],
+      deny: [...shellDeny.map(name => `Shell(${name})`), ...readDeny.map(glob => `Read(${glob.replace(/^~/, home)})`), ...writeDeny.map(glob => `Write(${glob.replace(/^~/, home)})`), ...mcpDeny, ...githubExtra],
     },
   };
 }
@@ -121,6 +127,6 @@ export const POLICY_PROMPT = [
   "Guardrails (enforced by Meadow; breaking them blocks the phase):",
   "- Never use sudo/su, delete outside the project, read ~/.ssh, ~/.meadow, keychains or .env files, change git remotes, push, force-push, pipe downloads into a shell, or install background services.",
   "- For system installs (brew, apt, winget), global installs (npm -g, pipx, cargo install), Docker, deployments or creating cloud resources, call the Meadow MCP tool `request_system_action` or `request_cloud_resource` with the exact command and why. Meadow asks the user and runs it for you.",
-  "- If you need a decision only the user can make (a product choice, an account, a missing credential), call the Meadow MCP tool `ask_human` instead of guessing.",
+  "- If you need a decision only the user can make (a product choice, an account, a missing credential), call the Meadow MCP tool `ask_human` instead of guessing. To send a status update or milestone without waiting for a reply, call `notify_human` (fire-and-forget).",
   "- Install project dependencies locally (npm/pnpm/yarn install, a Python virtualenv inside the project).",
 ].join("\n");

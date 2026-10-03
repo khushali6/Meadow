@@ -64,6 +64,7 @@ const configPatch = z.object({
   watch: z.object({ editor: z.boolean(), terminal: z.boolean() }).partial().optional(),
   llm: z.object({
     provider: providerId,
+    plannerEngine: z.enum(["engine", "llm"]),
     baseUrl: z.string().url(),
     model: z.string().min(1).max(200),
     embeddingModel: z.string().max(200),

@@ -7,6 +7,7 @@ import { audit } from "../core/audit";
 import { getDb } from "../core/db";
 import { networkEnv, runShell } from "../core/exec";
 import { redact, tail } from "../core/redact";
+import { bus } from "../core/events";
 import { getProject } from "../projects";
 import { hasGrant } from "./grants";
 import { classifyCommand } from "./policy";
@@ -62,6 +63,17 @@ export async function askHuman(input: { projectId: number; question: string; opt
     }
     await sleep(input.pollMs ?? 1500);
   }
+}
+
+/**
+ * Fire-and-forget notification to the user's Telegram (and the Meadow dashboard).
+ * Never waits for a reply. Use to send a status update, a milestone or a question-that-can-wait.
+ */
+export function notifyHuman(input: { projectId: number; message: string }): void {
+  const project = getProject(input.projectId);
+  const safeMessage = input.message.slice(0, 1500);
+  audit({ projectId: project.id, agent: "engine", user: "engine", tool: "broker.notify_human", risk: "READ", args: { message: safeMessage }, approval: "not_required", result: "ok", durationMs: 0, detail: safeMessage });
+  bus.emitEvent({ type: "message", projectId: project.id, title: `📢 ${safeMessage.split("\n")[0].slice(0, 160)}`, detail: safeMessage });
 }
 
 /** Policy-checked system command: refused, left to the engine (allowed), or run by Meadow after approval. */
