@@ -154,7 +154,7 @@ set -e
 [ "$STATUS" = 0 ] || [ "$STATUS" = 2 ] || fail "Setup stopped (exit $STATUS)."
 
 # ── Dashboard ───────────────────────────────────────────────────────────────
-[ "$START" = 1 ] || { echo; ok "Done. Start Meadow with: ${MEADOW[*]} start"; exit 0; }
+[ "$START" = 1 ] || { echo; ok "Done. Start Meadow with: $(printf '%q ' "${MEADOW[@]}")start"; exit 0; }
 if [ -n "$PID" ]; then
   ok "Meadow is still running (pid $PID): $(node -p 'require(process.argv[1]).url' "$HOME_DIR/daemon.json")?token=$(cat "$HOME_DIR/session-token" 2>/dev/null)"
   exit 0

@@ -53,7 +53,7 @@ export function environmentChecks(): SystemCheck[] {
   let writable = false;
   let freeDetail = "";
   try {
-    fs.mkdirSync(home, { recursive: true });
+    fs.mkdirSync(home, { recursive: true, mode: 0o700 });
     const probe = path.join(home, `.write-test-${process.pid}`);
     fs.writeFileSync(probe, "");
     fs.rmSync(probe);

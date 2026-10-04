@@ -92,7 +92,7 @@ if ($SkipTelegram) { $setupArgs += "--skip-telegram" }
 & $meadow[0] $meadow[1..9] @setupArgs
 if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 2) { Fail "Setup stopped (exit $LASTEXITCODE)." }
 
-if ($NoStart) { Ok "Done. Start Meadow with: $($meadow -join ' ') start"; exit 0 }
+if ($NoStart) { Ok "Done. Start Meadow with: $(($meadow | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }) -join ' ') start"; exit 0 }
 if ($running) { Ok "Meadow is still running (pid $running)."; exit 0 }
 
 $token = Join-Path $homeDir "session-token"
