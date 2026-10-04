@@ -112,8 +112,4 @@ temp/
 .meadow-home/
 secrets.env
 session-token
-
-# Design reference export (not part of the build)
-meadow (1)/
-meadow (1).zip
 relay-data/
