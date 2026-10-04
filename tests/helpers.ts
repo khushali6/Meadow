@@ -34,7 +34,7 @@ export function waitForEvent(predicate: (event: MeadowEvent) => boolean, timeout
   });
 }
 
-export const settled = (projectId: number) => waitForEvent(event => event.projectId === projectId && (event.type === "execution_finished" || (event.type === "control" && ["blocked", "paused", "waiting"].includes(String(event.payload?.status)))));
+export const settled = (projectId: number, timeoutMs?: number) => waitForEvent(event => event.projectId === projectId && (event.type === "execution_finished" || (event.type === "control" && ["blocked", "paused", "waiting"].includes(String(event.payload?.status)))), timeoutMs);
 
 export const THREE_PHASE_PLAN = `---
 project: demo-app

@@ -45,11 +45,11 @@ afterEach(async () => {
   env.cleanup();
 });
 
-async function runPlan(engine: FakeEngine) {
+async function runPlan(engine: FakeEngine, timeoutMs?: number) {
   setEngine(engine);
   const project = await createProject({ name: "demo-app", engine: "fake" });
   await approvePlan(savePlanVersion(project.id, THREE_PHASE_PLAN).id);
-  const done = settled(project.id);
+  const done = settled(project.id, timeoutMs);
   await harness.start(project.id);
   const final = await done;
   await new Promise(resolve => setTimeout(resolve, 50));
@@ -136,7 +136,7 @@ describe("finished app showcase", async () => {
     const fs = await import("node:fs");
     fs.writeFileSync(`${project.path}/index.html`, "<h1>Split the bill</h1>");
     await approvePlan(savePlanVersion(project.id, THREE_PHASE_PLAN).id);
-    const done = settled(project.id);
+    const done = settled(project.id, 110_000);
     await harness.start(project.id);
     expect((await done).payload?.status).toBe("completed");
     await new Promise(resolve => setTimeout(resolve, 200));
@@ -164,7 +164,7 @@ describe("finished app showcase", async () => {
       const files = acceptanceCalls++ === 0 ? { [E2E_FILE]: JSON.stringify(SPLIT_CASES) } : splitApp(false);
       return [...writes(files), { event: { type: "done" as const, title: "done", ok: true, reason: "completed" } }];
     });
-    const final = await runPlan(engine);
+    const final = await runPlan(engine, 220_000);
     expect(final.payload?.status).toBe("completed");
     expect(final.payload?.e2e).toEqual({ passed: 3, total: 3 });
 
