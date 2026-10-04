@@ -151,6 +151,25 @@ env:
     expect(parsePlan(SPEC_EXAMPLE.replace("    name: Menu and cart\n", "    name: Menu and cart\n    agent: designer\n")).errors[0].message).toMatch(/Unknown agent "designer"/);
   });
 
+  it("parses e2e checks, which need a preview block", () => {
+    const result = parsePlan(SPEC_EXAMPLE.replace("      - http: /menu", "      - http: /menu\n      - e2e: /menu"));
+    expect(result.ok && result.plan.phases[1].checks.at(-1)).toEqual({ kind: "e2e", path: "/menu" });
+    expect(parsePlan(SPEC_EXAMPLE.replace("      - http: /menu", "      - e2e: menu")).errors[0].message).toMatch(/route like/);
+    const noPreview = parsePlan(THREE_PHASE_PLAN.replace("      - file_exists: docs/README.md", "      - e2e: /"));
+    expect(noPreview.ok).toBe(false);
+    expect(noPreview.errors[0].message).toMatch(/http and e2e checks need a `preview` block/);
+  });
+
+  it("parses parallel groups and rejects phases in one group that depend on each other", () => {
+    const grouped = parsePlan(THREE_PHASE_PLAN.replace("    name: Feature\n", "    name: Feature\n    parallel_group: work\n").replace("    name: Docs\n    depends_on: [2]\n", "    name: Docs\n    depends_on: [1]\n    parallel_group: work\n"));
+    expect(grouped.ok).toBe(true);
+    if (!grouped.ok) return;
+    expect(grouped.plan.phases.map(phase => phase.parallelGroup)).toEqual([undefined, "work", "work"]);
+    const clash = parsePlan(THREE_PHASE_PLAN.replace("    name: Feature\n", "    name: Feature\n    parallel_group: work\n").replace("    name: Docs\n", "    name: Docs\n    parallel_group: work\n"));
+    expect(clash.ok).toBe(false);
+    expect(clash.errors[0].message).toMatch(/same parallel group "work"/);
+  });
+
   it("returns ui: null when the field is absent", () => {
     const result = parsePlan(SPEC_EXAMPLE);
     expect(result.ok).toBe(true);

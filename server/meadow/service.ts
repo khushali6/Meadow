@@ -24,7 +24,7 @@ export function planSummaryText(plan: Plan, version?: number): string {
   return lines.join("\n");
 }
 
-function orderedPhases(projectId: number): Array<PhaseRow & { checks: string[]; tasks: string[]; doneWhen: string; dependsOn: string[] }> {
+function orderedPhases(projectId: number): Array<PhaseRow & { checks: string[]; tasks: string[]; doneWhen: string; dependsOn: string[]; agent: string; parallelGroup: string | null }> {
   const row = activePlan(projectId);
   if (!row) return [];
   const parsed = parsePlan(row.raw_md);
@@ -32,12 +32,12 @@ function orderedPhases(projectId: number): Array<PhaseRow & { checks: string[]; 
   const rows = phasesFor(row.id);
   const phases = executionOrder(parsed.plan.phases).map(phase => {
     const phaseRow = rows.find(item => item.phase_key === phase.id)!;
-    return { ...phaseRow, checks: phase.checks.map(checkLabel), tasks: phase.tasks, doneWhen: phase.doneWhen, dependsOn: phase.dependsOn };
+    return { ...phaseRow, checks: phase.checks.map(checkLabel), tasks: phase.tasks, doneWhen: phase.doneWhen, dependsOn: phase.dependsOn, agent: phase.agent ?? "builder", parallelGroup: phase.parallelGroup ?? null };
   });
   const acceptance = rows.find(item => item.phase_key === ACCEPTANCE_KEY);
   if (acceptance) {
     const phase = acceptancePhase(parsed.plan);
-    phases.push({ ...acceptance, checks: [...phase.checks.map(checkLabel), checkLabel(E2E_CHECK)], tasks: [phase.tasks[0], ...phase.tasks.slice(2)], doneWhen: phase.doneWhen, dependsOn: [] });
+    phases.push({ ...acceptance, checks: [...phase.checks.map(checkLabel), checkLabel(E2E_CHECK)], tasks: [phase.tasks[0], ...phase.tasks.slice(2)], doneWhen: phase.doneWhen, dependsOn: [], agent: "qa", parallelGroup: null });
   }
   return phases;
 }

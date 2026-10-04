@@ -151,8 +151,51 @@ export async function resetHard(cwd: string, ref: string) {
   await git(cwd, "clean", "-fdq", "-e", ".meadow/");
 }
 
+/** Worktree paths attached to this repository (excluding the main checkout). */
+export async function worktrees(cwd: string): Promise<Array<{ path: string; branch: string | null }>> {
+  const out = await git(cwd, "worktree", "list", "--porcelain").catch(() => "");
+  const list: Array<{ path: string; branch: string | null }> = [];
+  for (const block of out.split("\n\n").filter(Boolean)) {
+    const dir = block.match(/^worktree (.+)$/m)?.[1];
+    if (!dir) continue;
+    list.push({ path: dir, branch: block.match(/^branch refs\/heads\/(.+)$/m)?.[1] ?? null });
+  }
+  return list.slice(1);
+}
+
+/** Checks `branch` out in a separate working directory, creating it from `from` when it doesn't exist yet. */
+export async function addWorktree(cwd: string, dir: string, branch: string, from: string) {
+  await git(cwd, "worktree", "prune");
+  const existing = (await worktrees(cwd)).find(item => item.branch === branch);
+  if (existing && path.resolve(existing.path) === path.resolve(dir) && fs.existsSync(dir)) return;
+  if (existing) await git(cwd, "worktree", "remove", "--force", existing.path);
+  if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(path.dirname(dir), { recursive: true });
+  if (await branchExists(cwd, branch)) await git(cwd, "worktree", "add", "-q", dir, branch);
+  else await git(cwd, "worktree", "add", "-q", "-b", branch, dir, from);
+}
+
+/** Commits anything left in the worktree onto its branch, then detaches the directory. The branch is kept. */
+export async function removeWorktree(cwd: string, dir: string) {
+  if (fs.existsSync(dir)) await commitAll(dir, "meadow: preserve work from a parallel agent").catch(() => null);
+  await git(cwd, "worktree", "remove", "--force", dir).catch(() => undefined);
+  if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+  await git(cwd, "worktree", "prune").catch(() => undefined);
+}
+
+/** Merges `branch` into `base` (checked out in cwd). On conflict the merge is aborted and the conflicting files returned. */
+export async function mergeInto(cwd: string, base: string, branch: string, message: string): Promise<{ ok: true; sha: string } | { ok: false; conflicts: string[] }> {
+  if ((await currentBranch(cwd)) !== base) await git(cwd, "checkout", "-q", base);
+  const result = await capture("git", ["merge", "--no-ff", "-q", "-m", message, branch], { cwd, env: GIT_ENV, timeoutMs: 60_000 });
+  if (result.code === 0) return { ok: true, sha: await headSha(cwd) };
+  const conflicts = (await capture("git", ["diff", "--name-only", "--diff-filter=U"], { cwd, env: GIT_ENV })).stdout.split("\n").filter(Boolean);
+  await capture("git", ["merge", "--abort"], { cwd, env: GIT_ENV });
+  return { ok: false, conflicts: conflicts.length ? conflicts : [(result.stderr || result.stdout).trim().split("\n")[0] ?? "merge failed"] };
+}
+
 /** Keep the failed branch for inspection under failed/, then return to the base branch tip. */
 export async function preserveAndReset(cwd: string, failedBranch: string, base: string) {
+  for (const tree of await worktrees(cwd)) if (tree.branch === failedBranch) await removeWorktree(cwd, tree.path);
   const branch = await currentBranch(cwd);
   if (branch === failedBranch) {
     await commitAll(cwd, `meadow: preserve failed attempt on ${failedBranch}`);

@@ -17,7 +17,7 @@ export const E2E_CHECK: Check = { kind: "cmd", cmd: `End-to-end browser tests ($
 /** The built-in last phase: the engine writes browser test cases, Meadow runs them, failures go back to the engine. */
 export function acceptancePhase(plan: Plan): PlanPhase {
   const seen = new Set<string>();
-  const checks = plan.phases.flatMap(phase => phase.checks).filter(check => check.kind !== "http").filter(check => {
+  const checks = plan.phases.flatMap(phase => phase.checks).filter(check => check.kind !== "http" && check.kind !== "e2e").filter(check => {
     const label = checkLabel(check);
     if (seen.has(label)) return false;
     seen.add(label);

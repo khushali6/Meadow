@@ -10,6 +10,8 @@ export const EVENT_TYPES = [
   "phase_started", "check_result", "phase_passed", "phase_blocked", "approval_requested", "approval_decided",
   "screenshot", "execution_started", "execution_finished", "plan_ready", "control", "guard",
   "atlas_trace", "atlas_ingest", "memory", "audit", "impact", "setup", "health",
+  /** The supervisor agent's diagnosis of a failed attempt, or its team report when a phase passes. */
+  "supervisor",
   /** Raw stdout line from the coding engine, streamed to the dashboard live console; never stored in the DB. */
   "console_line",
 ] as const;

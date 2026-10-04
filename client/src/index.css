@@ -625,6 +625,51 @@ code, pre, kbd, .plan-editor, .code-block, .event-detail pre { font-family: var(
   .pipeline-head { flex-direction: column; gap: 4px; }
 }
 
+/* Agent team: supervisor plus one lane per specialist. */
+.team-section { border: 1px solid var(--ink); background: var(--paper); margin-bottom: 18px; }
+.team-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; padding: 20px 20px 16px; border-bottom: 1px solid var(--ink); }
+.team-head h2 { margin: 8px 0 0; font-size: clamp(20px, 2.2vw, 28px); font-weight: 600; letter-spacing: -.02em; line-height: 1.15; max-width: 22ch; }
+.team-meta { display: flex; flex-wrap: wrap; gap: 14px; font: 11px var(--mono); color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.team-meta span { display: inline-flex; align-items: center; gap: 6px; }
+.team-grid { display: grid; }
+.team-lane { padding: 16px 18px 18px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 12px; min-width: 0; transition: background .25s var(--ease-ui); }
+.team-lane:last-child { border-right: 0; }
+.team-lane.supervisor { background: var(--light); border-right-color: var(--ink); }
+.team-lane.working { background: var(--sun-soft); }
+.team-lane header { display: flex; align-items: flex-start; gap: 10px; }
+.team-lane header .activity-dot { margin-top: 6px; }
+.team-lane header div { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.team-lane header strong { font-size: 14px; font-weight: 650; }
+.team-lane header span { font: 11px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-lane header em { font: 11px var(--mono); font-style: normal; color: var(--muted); }
+.team-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; margin: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.team-stats div { padding: 8px 0; }
+.team-stats dt { font: 10px var(--mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.team-stats dd { margin: 3px 0 0; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-note { margin: 0; font-size: 13px; line-height: 1.5; color: var(--ink); }
+.team-note time { font: 10px var(--mono); color: var(--muted); margin-left: 4px; }
+.team-note.small { font-size: 12px; color: var(--muted); border-left: 2px solid var(--sun); padding-left: 8px; }
+.team-hint { margin: 0; font-size: 12px; color: var(--muted); }
+.team-hint code { font: 11px var(--mono); background: var(--paper); border: 1px solid var(--line); padding: 1px 4px; }
+.team-phases { list-style: none; margin: 0; padding: 0; display: grid; }
+.team-phases li { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.team-phases li.current .team-phase-index { color: var(--sun); }
+.team-phase-index { font: 11px var(--mono); color: var(--muted); }
+.team-phase-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-phase-name small { font: 10px var(--mono); color: var(--muted); text-transform: uppercase; }
+@media (max-width: 1100px) {
+  .team-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .team-lane.supervisor { grid-column: 1 / -1; border-right: 0; border-bottom: 1px solid var(--ink); }
+  .team-lane { border-bottom: 1px solid var(--line); }
+}
+@media (max-width: 640px) {
+  .team-head { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .team-grid { grid-template-columns: minmax(0, 1fr) !important; }
+  .team-lane { border-right: 0; }
+}
+@media (prefers-reduced-motion: reduce) { .team-lane { transition: none; } }
+.dark .team-section, .dark .team-head { border-color: var(--line-strong); }
+
 /* Dark mode for the skill layer. */
 .dark { --cream: #111311; --light: #20231f; --paper: #171917; --ink: #f2f2ed; --muted: #a5a79f; --line: #3a3d37; --line-strong: #5f625a; --sun-soft: #2a2010; --success: #6fae7a; --warning: #d69e3a; --error: #e07a77; }
 .dark .button.primary { background: #f2f2ed; color: #111311; border-color: #f2f2ed; }

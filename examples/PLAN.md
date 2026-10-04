@@ -49,6 +49,7 @@ phases:
 
   - id: habits
     name: Habit list with streaks
+    agent: ui                # backend | ui | qa — the specialist the engine plays
     depends_on: [scaffold]
     tasks:
       - Add a form to create habits (inline validation for blank or duplicate names)
@@ -58,14 +59,32 @@ phases:
         streak > 0; show a glow-pulse animation via the motion spec from design.md
       - Persist habits in localStorage
       - Unit-test the streak calculation (gaps, today/yesterday edges)
+      - Add browser test cases for "/" to meadow.e2e.json (add a habit, check it off,
+        reject a blank name)
     checks:
       - cmd: npm test -- --run
       - cmd: npm run build
-      - http: /
+      - e2e: /                # runs the meadow.e2e.json cases for "/" in a real browser
     done_when: Habits can be added, checked off, and survive a reload; streak tests pass
+
+  - id: export
+    name: Export and import
+    agent: backend
+    parallel_group: features  # runs at the same time as "weekly", in its own git worktree
+    depends_on: [habits]
+    tasks:
+      - Export all habits and check-ins to a JSON file; import validates the shape
+        and reports a clear error for a bad file
+      - Unit-test export/import round-trips and invalid files
+    checks:
+      - cmd: npm test -- --run
+      - cmd: npm run build
+    done_when: Data survives an export and re-import; bad files are rejected clearly
 
   - id: weekly
     name: Weekly view
+    agent: ui
+    parallel_group: features
     depends_on: [habits]
     tasks:
       - Show the last seven days per habit as a row of cells with weekday labels

@@ -35,6 +35,36 @@ export function filledEnvNames(projectPath: string): Set<string> {
   return filled;
 }
 
+/** Replaces every value from the project's .env.local / .env found in `text` with [REDACTED]. */
+export function scrubProjectEnv(projectPath: string, text: string): string {
+  let out = text;
+  for (const file of [ENV_FILE, ".env"]) {
+    let raw = "";
+    try {
+      raw = fs.readFileSync(path.join(projectPath, file), "utf8");
+    } catch {
+      continue;
+    }
+    for (const line of raw.split(/\r?\n/)) {
+      if (/^\s*#/.test(line)) continue;
+      const value = line.match(LINE)?.[2].replace(/\s+#.*$/, "").trim().replace(/^(["'])(.*)\1$/, "$2").trim();
+      if (value && value.length >= 6) out = out.split(value).join("[REDACTED]");
+    }
+  }
+  return out;
+}
+
+/** Gives a git worktree the main checkout's gitignored env files (mode 600) so its app and tests see the same settings. */
+export function copyEnvFiles(fromDir: string, toDir: string) {
+  for (const file of [ENV_FILE, ".env"]) {
+    const source = path.join(fromDir, file);
+    const target = path.join(toDir, file);
+    if (!fs.existsSync(source) || fs.existsSync(target)) continue;
+    fs.copyFileSync(source, target);
+    fs.chmodSync(target, 0o600);
+  }
+}
+
 /** Required variables that are missing or empty. */
 export function missingEnv(projectPath: string, plan: Pick<Plan, "env">): EnvVar[] {
   const filled = filledEnvNames(projectPath);

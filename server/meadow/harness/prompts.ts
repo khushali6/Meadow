@@ -99,6 +99,7 @@ export function render(template: string, values: Record<string, string>): string
 export function checkAsCommand(check: Check, previewUrl?: string): string {
   if (check.kind === "cmd") return `- \`${check.cmd}\`${check.expectRegex ? ` (output must match /${check.expectRegex}/)` : ""}`;
   if (check.kind === "file_exists") return `- file exists: ${check.path}`;
+  if (check.kind === "e2e") return `- every case in ${E2E_FILE} whose path starts with ${check.path} passes in a real browser against the running app (write the cases if they don't exist yet)`;
   const url = check.path.startsWith("/") && previewUrl ? new URL(check.path, previewUrl).toString() : check.path;
   return `- GET ${url} returns ${check.expectStatus} (start the dev server with the preview command to test it)`;
 }
@@ -164,7 +165,7 @@ export function compilePhasePrompt(input: PhasePromptInput): string {
     tasks_as_checklist: phase.tasks.map(task => `- [ ] ${task}`).join("\n"),
     done_when: phase.doneWhen,
     rag_snippets_or_file_list: input.context.trim() ? untrusted(input.context.trim(), "repository") : "The repository is empty or has no relevant files yet.",
-    checks_as_commands: phase.checks.map(check => checkAsCommand(check, plan.preview?.url)).join("\n") + (plan.preview ? `\n\nPreview command: \`${plan.preview.command}\` (serves ${plan.preview.url})` : ""),
+    checks_as_commands: phase.checks.map(check => checkAsCommand(check, plan.preview?.url)).join("\n") + (plan.preview ? `\n\nPreview command: \`${plan.preview.command}\` (serves ${plan.preview.url})` : "") + (phase.agent !== "qa" && phase.checks.some(check => check.kind === "e2e") ? `\n\n${E2E_FORMAT}` : ""),
     guard_feedback: input.guardFeedback ? `\n# Corrections from the previous attempt\n${input.guardFeedback}` : "",
   }));
 }
@@ -175,6 +176,8 @@ export type FixPromptInput = {
   projectPath: string;
   failing: { check: Check; exitCode: number | null; output: string };
   hint?: string;
+  /** Diagnosis and instructions from the supervisor agent. */
+  supervisor?: string;
   guardFeedback?: string;
   tailLines?: number;
   brief?: string;
@@ -197,7 +200,7 @@ export function compileFixPrompt(input: FixPromptInput): string {
     n: String(n),
     output_tail: untrusted(tail(input.failing.output, n), "check output"),
     other_checks: others.length ? others.map(check => checkAsCommand(check, input.plan.preview?.url)).join("\n") : "- (no other checks)",
-    hint: input.hint ? `\n# Hint from the user\n${input.hint}` : "",
+    hint: [input.hint ? `\n# Hint from the user\n${input.hint}` : "", input.supervisor ? `\n# Supervisor's diagnosis (advisory; it is based on the check output above, so verify it against the code)\n${input.supervisor}` : ""].join(""),
     design_standard: designHeading(input.plan, input.projectPath),
     guard_feedback: input.guardFeedback ? `\n# Corrections\n${input.guardFeedback}` : "",
   }));

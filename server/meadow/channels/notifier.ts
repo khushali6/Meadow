@@ -4,6 +4,7 @@ import { bus, type MeadowEvent } from "../core/events";
 import { redact } from "../core/redact";
 import { getProject } from "../projects";
 import { engineLabel } from "../engines/registry";
+import { roleLabel, teamReport, type TeamMember } from "../harness/orchestrator";
 import { applyEvent, isFinal, renderProgress, startProgress, type PhaseProgress } from "./progress";
 import { isTransient, type InlineButton, type TelegramApi } from "./telegramApi";
 
@@ -26,7 +27,7 @@ export function wantsEvent(event: MeadowEvent): boolean {
   if (event.type === "plan_ready" && event.payload?.status === "draft") return true;
   if (event.type === "execution_finished") return level !== "failures" || event.payload?.status !== "completed";
   if (level === "failures") return event.type === "error" && Boolean(event.executionId) && event.runId === null;
-  if (level === "phases") return ["phase_started", "phase_passed", "plan_ready", "execution_started"].includes(event.type) || (event.type === "check_result" && Boolean(event.payload?.e2eCase)) || (event.type === "control" && ["paused", "waiting"].includes(String(event.payload?.status)));
+  if (level === "phases") return ["phase_started", "phase_passed", "plan_ready", "execution_started", "supervisor"].includes(event.type) || (event.type === "check_result" && Boolean(event.payload?.e2eCase)) || (event.type === "control" && ["paused", "waiting"].includes(String(event.payload?.status)));
   return true;
 }
 
@@ -40,8 +41,10 @@ export function formatEvent(event: MeadowEvent): Outgoing | null {
     case "phase_passed": {
       const checks = (p.checks as string[] | undefined) ?? [];
       const deps = (p.dependencyChanges as string[] | undefined) ?? [];
+      const member = p.team as TeamMember | undefined;
       const text = [
         event.title,
+        ...(member ? [`👥 ${roleLabel(member.agent)}${member.attempts > 1 ? ` · ${member.attempts} attempts` : ""}${p.parallel ? " · worked in parallel" : ""}${member.notes.length ? `\n🧭 Supervisor: ${member.notes[member.notes.length - 1].slice(0, 300)}` : ""}`] : []),
         `Checks: ${checks.map(check => `${check} ✓`).join(", ") || "none"}`,
         `Changed: ${p.files ?? 0} files (+${p.additions ?? 0} −${p.deletions ?? 0})`,
         `New dependencies: ${deps.length ? deps.join(", ") : "none"}`,
@@ -91,6 +94,7 @@ export function formatEvent(event: MeadowEvent): Outgoing | null {
           e2e ? `\n${e2e.passed}/${e2e.total} end-to-end test cases passed in a real browser. Each case's screenshots were sent above.` : "",
           p.runHow ? `\nRun it yourself:\n${folder ? `cd ${folder}\n` : ""}${p.runHow}` : "",
           photos.length ? `\nScreenshots of the running app (desktop and mobile) follow.` : "",
+          Array.isArray(p.team) && p.team.length ? `\n${teamReport(p.team as TeamMember[])}` : "",
           event.detail ? `\n${event.detail}` : "",
         ];
         return { text: lines.filter(Boolean).join("\n"), photos, urgent: true, buttons: [[{ text: "Add feature", callback_data: `addfeature:${pid}` }, { text: "Screenshot again", callback_data: `shot:${pid}` }]] };
@@ -125,6 +129,8 @@ export function formatEvent(event: MeadowEvent): Outgoing | null {
     }
     case "guard":
       return { text: `🛡 ${event.title}\n${event.detail.slice(0, 800)}`, urgent: false, silent: true };
+    case "supervisor":
+      return { text: `🧭 ${event.title}${p.by ? ` (${p.by})` : ""}\n${event.detail.slice(0, 1200)}`, urgent: false, silent: p.action !== "escalate" };
     case "control": {
       const status = p.status as string | undefined;
       if (status === "paused" || status === "waiting") return { text: `⏸ ${event.title}${event.detail ? `\n${event.detail}` : ""}`, urgent: false, buttons: [[{ text: "Resume", callback_data: `resume:${pid}` }, { text: "Stop", callback_data: `stop:${pid}` }]] };
@@ -172,7 +178,8 @@ export class Notifier {
   private queue: Outgoing[] = [];
   private offline: Outgoing[] = [];
   private outbox: Promise<void> = Promise.resolve();
-  private cards = new Map<number, LiveCard>();
+  /** Keyed by `${projectId}:${phaseId}` so parallel phases each keep their own card. */
+  private cards = new Map<string, LiveCard>();
   private unsubscribe: (() => void) | null = null;
   private quietTimer: NodeJS.Timeout | null = null;
   private heartbeat: NodeJS.Timeout | null = null;
@@ -254,29 +261,32 @@ export class Notifier {
 
   /** One progress card per running phase, created on phase start and edited in place as events arrive. */
   private track(chat: number, event: MeadowEvent) {
-    const key = event.projectId ?? 0;
+    const project = event.projectId ?? 0;
     if (event.type === "phase_started") {
+      const key = `${project}:${event.phaseId ?? 0}`;
       const previous = this.cards.get(key);
       if (previous?.timer) clearTimeout(previous.timer);
-      const card: LiveCard = { progress: startProgress(event, { projectName: safeName(key), engine: engineFor(event.executionId), maxAttempts: loadConfig().harness.maxAttempts }), messageId: 0, chain: Promise.resolve(), timer: null, lastText: "", lastEdit: 0 };
+      const card: LiveCard = { progress: startProgress(event, { projectName: safeName(project), engine: engineFor(event.executionId), maxAttempts: loadConfig().harness.maxAttempts }), messageId: 0, chain: Promise.resolve(), timer: null, lastText: "", lastEdit: 0 };
       this.cards.set(key, card);
       if (!inQuietHours()) this.render(chat, card);
       return;
     }
-    const card = this.cards.get(key);
-    if (!card || !applyEvent(card.progress, event)) return;
-    if (inQuietHours()) return;
-    if (isFinal(card.progress.stage)) {
-      if (card.timer) clearTimeout(card.timer);
-      card.timer = null;
-      this.render(chat, card);
-      this.cards.delete(key);
-      return;
+    const keys = event.phaseId && this.cards.has(`${project}:${event.phaseId}`) ? [`${project}:${event.phaseId}`] : event.phaseId ? [] : [...this.cards.keys()].filter(key => key.startsWith(`${project}:`));
+    for (const key of keys) {
+      const card = this.cards.get(key)!;
+      if (!applyEvent(card.progress, event) || inQuietHours()) continue;
+      if (isFinal(card.progress.stage)) {
+        if (card.timer) clearTimeout(card.timer);
+        card.timer = null;
+        this.render(chat, card);
+        this.cards.delete(key);
+        continue;
+      }
+      if (!card.timer) card.timer = setTimeout(() => {
+        card.timer = null;
+        this.render(chat, card);
+      }, RENDER_DEBOUNCE_MS);
     }
-    if (!card.timer) card.timer = setTimeout(() => {
-      card.timer = null;
-      this.render(chat, card);
-    }, RENDER_DEBOUNCE_MS);
   }
 
   private render(chat: number, card: LiveCard) {

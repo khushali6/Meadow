@@ -24,6 +24,7 @@ import { healthCheck, llmRouting, providerFor, providerSummaries } from "./meado
 import { assertSelectableEngine, engineInfo } from "./meadow/engines/registry";
 import { harness } from "./meadow/harness/runner";
 import { openWatchWindows } from "./meadow/harness/watch";
+import { teamStatus } from "./meadow/harness/orchestrator";
 import { overlapsMeadow } from "./meadow/core/self";
 import { handleAction, handleText } from "./meadow/intake/conversation";
 import { improvePlan } from "./meadow/intake/llm";
@@ -57,7 +58,7 @@ const providerSettings = z.object({ baseUrl: z.string().url().max(300), model: z
 
 const configPatch = z.object({
   engine: z.object({ default: z.enum(["cursor", "claude_code", "codex", "gemini", "custom", "fake"]), model: z.string().nullable(), models: z.record(z.string(), z.string().max(120).nullable()), runTimeoutS: z.number().min(60).max(6 * 3600), noOutputTimeoutS: z.number().min(30).max(3600), claudeUseFreeLlmApi: z.boolean() }).partial().optional(),
-  harness: z.object({ maxAttempts: z.number().int().min(1).max(10), checkTimeoutS: z.number().min(10).max(7200), massDeleteThreshold: z.number().int().min(1), phaseGate: z.enum(["auto", "ask"]), autoResume: z.boolean(), autoVerify: z.boolean(), preflightImpact: z.boolean(), e2e: z.boolean(), design: z.boolean() }).partial().optional(),
+  harness: z.object({ maxAttempts: z.number().int().min(1).max(10), checkTimeoutS: z.number().min(10).max(7200), massDeleteThreshold: z.number().int().min(1), phaseGate: z.enum(["auto", "ask"]), autoResume: z.boolean(), autoVerify: z.boolean(), preflightImpact: z.boolean(), e2e: z.boolean(), design: z.boolean(), supervisor: z.object({ enabled: z.boolean(), provider: providerId, model: z.string().min(1).max(120) }).partial(), parallel: z.object({ enabled: z.boolean(), maxAgents: z.number().int().min(1).max(8) }).partial() }).partial().optional(),
   updates: z.object({ check: z.boolean() }).partial().optional(),
   budget: z.object({ phaseTokens: z.number().int().min(1000), dailyTokens: z.number().int().min(1000), phaseWallClockS: z.number().int().min(60) }).partial().optional(),
   telegram: z.object({ mode: z.enum(["hosted", "own"]), relayUrl: z.string().max(300), notificationLevel: z.enum(["all", "phases", "failures"]), quietHours: z.object({ enabled: z.boolean(), start: z.number().int().min(0).max(23), end: z.number().int().min(0).max(23) }), voiceReplies: z.boolean() }).partial().optional(),
@@ -292,6 +293,7 @@ export const appRouter = router({
   project: publicProcedure.input(z.object({ id: z.number() })).query(({ input }) => projectDetail(input.id)),
   phaseEvidence: publicProcedure.input(z.object({ phaseId: z.number() })).query(({ input }) => phaseEvidence(input.phaseId)),
   phaseDiff: publicProcedure.input(z.object({ phaseId: z.number() })).query(({ input }) => phaseDiff(input.phaseId)),
+  teamStatus: publicProcedure.query(() => teamStatus()),
 
   createProject: publicProcedure.input(z.object({ name: z.string().min(2).max(48), engine: z.string(), description: z.string().max(500).optional() })).mutation(({ input }) => createProject(input)),
   updateProject: publicProcedure.input(z.object({ id: z.number(), engine: z.string().optional(), screenshots: z.boolean().optional(), description: z.string().optional() })).mutation(({ input }) => {

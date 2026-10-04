@@ -238,6 +238,18 @@ export function SettingsView({ settings, overview, project, onNavigate }: { sett
         <Row label="Approvals expire after" hint="Expired approvals are always denied."><NumberInput value={config.approvals.expiryS} min={60} suffix="s" onCommit={value => patch({ approvals: { expiryS: value } })} /></Row>
       </Section>
 
+      <Section title="Agent team" description="Specialist agents (backend, UI, QA) work in your coding engine; a local supervisor model reads their failures and reports to you on Telegram.">
+        <Row label="Supervisor" hint="After a failed attempt the supervisor diagnoses the cause, gives the fix agent concrete instructions, and stops early when only you can unblock it. It never sees your .env values. If the model isn't reachable, the agent model above supervises instead."><Toggle checked={config.harness.supervisor.enabled} onChange={value => patch({ harness: { supervisor: { enabled: value } } })} label="Supervisor" /></Row>
+        <Row label="Supervisor model" hint="Default: Qwen 2.5 Coder on Ollama (run `ollama pull qwen2.5-coder:7b`).">
+          <select value={config.harness.supervisor.provider} onChange={event => patch({ harness: { supervisor: { provider: event.target.value as typeof config.harness.supervisor.provider } } })}>
+            {(["ollama", "lmstudio", "freellmapi", "openai", "gemini", "anthropic", "openrouter", "custom"] as const).map(id => <option key={id} value={id}>{id}</option>)}
+          </select>
+          <input key={config.harness.supervisor.model} className="text-input" defaultValue={config.harness.supervisor.model} aria-label="Supervisor model name" onBlur={event => { const model = event.target.value.trim(); if (model && model !== config.harness.supervisor.model) patch({ harness: { supervisor: { model } } }); }} />
+        </Row>
+        <Row label="Parallel agents" hint="Phases the plan marks with the same parallel_group run at the same time, each in its own git worktree, then merge into main. A conflicting agent merges main into its branch and resolves the conflict itself."><Toggle checked={config.harness.parallel.enabled} onChange={value => patch({ harness: { parallel: { enabled: value } } })} label="Parallel agents" /></Row>
+        <Row label="Agents at once"><NumberInput value={config.harness.parallel.maxAgents} min={1} onCommit={value => patch({ harness: { parallel: { maxAgents: Math.min(8, value) } } })} /></Row>
+      </Section>
+
       <Section title="Automation" description="What Meadow does on its own. Plans, writes and destructive actions still wait for your approval.">
         <Row label="Keep graph and memory live" hint="Watches git every 20 s; changed files are re-indexed and the graph is rebuilt in one transaction."><Toggle checked={config.atlas.liveUpdate} onChange={value => patch({ atlas: { liveUpdate: value } })} label="Live graph" /></Row>
         <Row label="Impact analysis before each phase" hint="Adds the affected services, APIs, tables and owners to the engine's context."><Toggle checked={config.harness.preflightImpact} onChange={value => patch({ harness: { preflightImpact: value } })} label="Preflight impact" /></Row>

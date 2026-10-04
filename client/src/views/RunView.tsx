@@ -1,10 +1,11 @@
 import type { LucideIcon } from "lucide-react";
-import { AlertTriangle, Bot, Camera, Check, CheckCircle2, CircleDot, Command, Eye, FileCode2, FileText, GitBranch, Pause, Play, RotateCcw, ShieldCheck, SkipForward, Square, Terminal, WandSparkles, XCircle } from "lucide-react";
+import { AlertTriangle, Bot, Camera, Check, CheckCircle2, CircleDot, Command, Compass, Eye, FileCode2, FileText, GitBranch, Pause, Play, RotateCcw, ShieldCheck, SkipForward, Square, Terminal, WandSparkles, XCircle } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { EmptyState, ErrorNote, PageHeader, StatusTag, clockTime, relativeTime } from "../components/common";
 import { MotionButton, Reveal, TabIndicator } from "../components/animation/motion";
 import { ExecutionPipeline, useCheckpointLines, useStaggerNewRows, type PipelineStage } from "../components/animation/technical";
 import { StatusPanel } from "../components/StatusPanel";
+import { TeamPanel } from "../components/TeamPanel";
 import { screenshotUrl } from "../lib/api";
 import { trpc } from "../lib/trpc";
 import type { Event, Phase, ProjectDetail } from "../lib/types";
@@ -12,7 +13,7 @@ import type { Event, Phase, ProjectDetail } from "../lib/types";
 const eventIcons: Record<string, LucideIcon> = {
   phase_started: Play, thinking: WandSparkles, tool_call: Terminal, file_edit: FileCode2, command_run: Command, check_result: CheckCircle2,
   screenshot: Camera, phase_passed: Check, message: Bot, done: CheckCircle2, error: XCircle, phase_blocked: AlertTriangle, guard: ShieldCheck,
-  approval_requested: ShieldCheck, approval_decided: ShieldCheck, session_started: Play, execution_started: Play, execution_finished: CheckCircle2, control: CircleDot, plan_ready: FileText,
+  approval_requested: ShieldCheck, approval_decided: ShieldCheck, session_started: Play, execution_started: Play, execution_finished: CheckCircle2, control: CircleDot, plan_ready: FileText, supervisor: Compass,
 };
 
 const FILTERS: Record<string, (event: Event) => boolean> = {
@@ -20,6 +21,7 @@ const FILTERS: Record<string, (event: Event) => boolean> = {
   Checks: event => ["check_result", "phase_passed", "phase_blocked"].includes(event.type),
   Files: event => ["file_edit", "command_run", "tool_call", "guard"].includes(event.type),
   Problems: event => ["error", "phase_blocked", "guard"].includes(event.type),
+  Supervisor: event => event.type === "supervisor",
 };
 
 const STAGE_INDEX: Record<string, number> = { pending: -1, preparing: 0, running: 1, fixing: 1, verifying: 2, passed: 3, skipped: 3 };
@@ -161,6 +163,7 @@ export function RunView({ detail, onNavigate }: { detail: ProjectDetail; onNavig
           <ExecutionPipeline stages={pipeline.stages} current={pipeline.current} state={pipeline.state} />
         </section>
       ) : null}
+      {phases.length ? <TeamPanel phases={phases} events={events} active={active} /> : null}
       <div className="run-grid">
         <section className="panel phases-panel" aria-label="Phases">
           <div className="panel-heading"><div><span className="panel-kicker">Execution plan</span><h2>Phases</h2></div><span className="progress-label">{passedCount}/{phases.length} passed</span></div>

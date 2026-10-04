@@ -51,8 +51,23 @@ export type MeadowConfig = {
    * project's detected typecheck/lint/test/build commands that passed the baseline. preflightImpact: show the
    * engine what a phase's changes can affect before it starts. design: web projects get the design standard in
    * every prompt and the browser tests fail pages that still look like browser defaults.
+   * supervisor: a local model (Ollama/Qwen by default) reads failed checks, gives the fix agent a diagnosis, stops
+   * hopeless loops early and writes the team report; skipped when the model is not reachable.
+   * parallel: phases sharing a `parallel_group` run at the same time in separate git worktrees.
    */
-  harness: { maxAttempts: number; checkTimeoutS: number; massDeleteThreshold: number; phaseGate: PhaseGate; autoResume: boolean; autoVerify: boolean; preflightImpact: boolean; e2e: boolean; design: boolean };
+  harness: {
+    maxAttempts: number;
+    checkTimeoutS: number;
+    massDeleteThreshold: number;
+    phaseGate: PhaseGate;
+    autoResume: boolean;
+    autoVerify: boolean;
+    preflightImpact: boolean;
+    e2e: boolean;
+    design: boolean;
+    supervisor: { enabled: boolean; provider: ProviderId; model: string };
+    parallel: { enabled: boolean; maxAgents: number };
+  };
   budget: { phaseTokens: number; dailyTokens: number; phaseWallClockS: number };
   /** `hosted` talks to the Meadow bot through a relay (one-click connect); `own` uses a bot token you created. */
   telegram: { mode: "hosted" | "own"; relayUrl: string; ownerId: number | null; notificationLevel: NotificationLevel; quietHours: { enabled: boolean; start: number; end: number }; voiceReplies: boolean };
@@ -106,7 +121,7 @@ export const DEFAULT_CONFIG: MeadowConfig = {
   },
   memory: { embeddings: "local", embeddingProvider: null },
   engine: { default: "cursor", model: null, models: {}, runTimeoutS: 45 * 60, noOutputTimeoutS: 5 * 60, claudeUseFreeLlmApi: false, custom: { label: "Custom command", command: "" } },
-  harness: { maxAttempts: 3, checkTimeoutS: 600, massDeleteThreshold: 20, phaseGate: "auto", autoResume: false, autoVerify: true, preflightImpact: true, e2e: true, design: true },
+  harness: { maxAttempts: 3, checkTimeoutS: 600, massDeleteThreshold: 20, phaseGate: "auto", autoResume: false, autoVerify: true, preflightImpact: true, e2e: true, design: true, supervisor: { enabled: true, provider: "ollama", model: "qwen2.5-coder:7b" }, parallel: { enabled: true, maxAgents: 3 } },
   budget: { phaseTokens: 2_000_000, dailyTokens: 20_000_000, phaseWallClockS: 90 * 60 },
   telegram: { mode: "hosted", relayUrl: "", ownerId: null, notificationLevel: "all", quietHours: { enabled: false, start: 22, end: 8 }, voiceReplies: false },
   screenshots: { enabled: true },
@@ -157,6 +172,9 @@ function envOverrides(config: MeadowConfig): MeadowConfig {
   if (env.MEADOW_UPDATE_URL) next.updates.url = env.MEADOW_UPDATE_URL;
   if (env.MEADOW_RELAY_URL) next.telegram.relayUrl = env.MEADOW_RELAY_URL;
   if (env.MEADOW_ENGINE) next.engine.default = env.MEADOW_ENGINE as EngineName;
+  if (env.MEADOW_SUPERVISOR_PROVIDER) next.harness.supervisor.provider = env.MEADOW_SUPERVISOR_PROVIDER as ProviderId;
+  if (env.MEADOW_SUPERVISOR_MODEL) next.harness.supervisor.model = env.MEADOW_SUPERVISOR_MODEL;
+  if (env.MEADOW_SUPERVISOR === "off") next.harness.supervisor.enabled = false;
   return next;
 }
 

@@ -3,7 +3,9 @@ import { isMap, isSeq, LineCounter, parseDocument, type Node as YamlNode } from 
 export type Check =
   | { kind: "cmd"; cmd: string; expectRegex?: string; timeoutS?: number }
   | { kind: "file_exists"; path: string }
-  | { kind: "http"; path: string; expectStatus: number };
+  | { kind: "http"; path: string; expectStatus: number }
+  /** Runs the meadow.e2e.json cases whose path starts with `path` in a real browser against the preview. */
+  | { kind: "e2e"; path: string };
 
 export const AGENT_ROLES = ["backend", "ui", "qa"] as const;
 export type AgentRole = (typeof AGENT_ROLES)[number];
@@ -19,6 +21,8 @@ export type PlanPhase = {
   agent?: AgentRole;
   /** false turns off the in-browser design review for this phase. */
   uiGate?: boolean;
+  /** Phases with the same group run at the same time, each in its own git worktree. */
+  parallelGroup?: string;
 };
 
 export type EnvVar = { name: string; hint: string };
@@ -102,6 +106,7 @@ export function withServicesPhase(markdown: string): string {
 export function checkLabel(check: Check): string {
   if (check.kind === "cmd") return check.cmd;
   if (check.kind === "file_exists") return `file exists: ${check.path}`;
+  if (check.kind === "e2e") return `browser tests on ${check.path}`;
   return `GET ${check.path} → ${check.expectStatus}`;
 }
 
@@ -237,8 +242,12 @@ export function parsePlan(markdown: string): ParseResult {
             const target = c.http.trim();
             if (!target.startsWith("/") && !isLocalUrl(target)) err(checkNode, `${cf}.http`, "http checks must be a route (\"/menu\") or a localhost URL.");
             checks.push({ kind: "http", path: target, expectStatus: c.expect_status === undefined ? 200 : Number(c.expect_status) });
+          } else if (typeof c.e2e === "string" && c.e2e.trim()) {
+            const target = c.e2e.trim();
+            if (!target.startsWith("/")) err(checkNode, `${cf}.e2e`, "e2e checks take a route like \"/\" or \"/deck\".");
+            checks.push({ kind: "e2e", path: target });
           } else {
-            err(checkNode, cf, "Unknown check. Use `cmd: <command>`, `file_exists: <path>` or `http: <route>`. LLM-judged checks are not supported.");
+            err(checkNode, cf, "Unknown check. Use `cmd: <command>`, `file_exists: <path>`, `http: <route>` or `e2e: <route>`. LLM-judged checks are not supported.");
           }
         });
       }
@@ -250,7 +259,12 @@ export function parsePlan(markdown: string): ParseResult {
       }
       if (ph.ui_gate !== undefined && typeof ph.ui_gate !== "boolean") err(getNode(node, "ui_gate") ?? node, `${field}.ui_gate`, "`ui_gate` must be true or false.");
       const uiGate = typeof ph.ui_gate === "boolean" ? ph.ui_gate : undefined;
-      phases.push({ id, name, dependsOn, tasks, checks, doneWhen, ...(agent ? { agent } : {}), ...(uiGate === undefined ? {} : { uiGate }) });
+      let parallelGroup: string | undefined;
+      if (ph.parallel_group !== undefined && ph.parallel_group !== null) {
+        if (typeof ph.parallel_group === "string" || typeof ph.parallel_group === "number") parallelGroup = String(ph.parallel_group).trim() || undefined;
+        else err(getNode(node, "parallel_group") ?? node, `${field}.parallel_group`, "`parallel_group` must be a short name like \"features\".");
+      }
+      phases.push({ id, name, dependsOn, tasks, checks, doneWhen, ...(agent ? { agent } : {}), ...(uiGate === undefined ? {} : { uiGate }), ...(parallelGroup ? { parallelGroup } : {}) });
     });
   }
 
@@ -261,8 +275,14 @@ export function parsePlan(markdown: string): ParseResult {
       if (!ids.has(dep)) err(getNode(node, "depends_on") ?? node, `phases[${i}].depends_on`, `Phase "${phase.name}" depends on unknown phase "${dep}".`);
       if (dep === phase.id) err(getNode(node, "depends_on") ?? node, `phases[${i}].depends_on`, `Phase "${phase.name}" cannot depend on itself.`);
     }
-    if (!preview && phase.checks.some(check => check.kind === "http")) err(node, `phases[${i}].checks`, "http checks need a `preview` block (command and url).");
+    if (!preview && phase.checks.some(check => check.kind === "http" || check.kind === "e2e")) err(node, `phases[${i}].checks`, "http and e2e checks need a `preview` block (command and url).");
     if (phase.checks.every(check => check.kind === "file_exists")) warnings.push({ line: lineOf(node), field: `phases[${i}].checks`, message: `Phase "${phase.name}" only checks that files exist; consider adding a build or test command.` });
+  });
+
+  phases.forEach((phase, i) => {
+    if (!phase.parallelGroup) return;
+    const sibling = phase.dependsOn.find(dep => phases.find(other => other.id === dep)?.parallelGroup === phase.parallelGroup);
+    if (sibling) err(isSeq(phasesNode) ? phasesNode.items[i] : phasesNode, `phases[${i}].parallel_group`, `Phase "${phase.name}" depends on phase ${sibling} in the same parallel group "${phase.parallelGroup}"; phases that run at the same time can't depend on each other.`);
   });
 
   const cycle = findCycle(phases);

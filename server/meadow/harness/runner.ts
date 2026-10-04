@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { engineModel, getSecret, loadConfig } from "../config";
+import { engineModel, getSecret, homePath, loadConfig } from "../config";
 import { requestApproval } from "../core/approvals";
 import { getDb, now } from "../core/db";
 import { bus, type EventType } from "../core/events";
@@ -11,7 +11,7 @@ import type { CaseResult } from "../visual/e2e";
 import { meadowOverlapMessage, overlapsMeadow } from "../core/self";
 import type { Engine, EngineEvent } from "../engines/base";
 import { assertSelectableEngine, getEngine } from "../engines/registry";
-import { executionOrder, SERVICES_PHASE_ID, type Plan, type PlanPhase } from "../planning/format";
+import { executionOrder, SERVICES_PHASE_ID, type Check, type Plan, type PlanPhase } from "../planning/format";
 import { getProject, parsedActivePlan, phasesFor, projectRules, touchProject, type PhaseRow, type ProjectRow } from "../projects";
 import { indexMemory, indexProject, promptContext } from "../rag/index";
 import { captureRoutes } from "../visual/capture";
@@ -34,7 +34,8 @@ import { classifyCommand, classifyMcpCall, type Verdict } from "../guard/policy"
 import { compileFixPrompt, compilePhasePrompt, rulesFileContent } from "./prompts";
 import { generateProjectDocs } from "./docs";
 import { generateUiDesignBrief, isWebPlan } from "./design";
-import { ENV_FILE, missingEnv, writeEnvScaffold } from "./env";
+import { copyEnvFiles, ENV_FILE, missingEnv, writeEnvScaffold } from "./env";
+import { diagnoseFailure, roleLabel, supervisorAvailable, teamReport, type SupervisorVerdict, type TeamMember } from "./orchestrator";
 import { runDesignReview, touchesUi, uiGateApplies } from "./uigate";
 import { summarizePhase } from "./summarize";
 import { verify, type CheckOutcome } from "./verifier";
@@ -64,12 +65,19 @@ type Active = {
   abort: AbortController;
   pauseRequested: boolean;
   stopRequested: boolean;
-  engineRunKey: string | null;
+  engineRunKeys: Set<string>;
   hint: string | null;
   budgetOverride: boolean;
   servicesOverride: boolean;
   envOverride: boolean;
   lastE2e: { results: CaseResult[]; runHow: string | null; url: string | null } | null;
+  /** While a parallel group runs, the first park request is held here until every agent in the group stops. */
+  deferPark: boolean;
+  pendingPark: { phase: PhaseRow | null; status: "paused" | "waiting" | "blocked"; note: string } | null;
+  /** Parallel agents share one preview port and one main checkout. */
+  previewLock: Semaphore;
+  mergeLock: Semaphore;
+  team: TeamMember[];
 };
 
 type PhaseOutcome = "passed" | "blocked" | "paused" | "stopped";
@@ -94,17 +102,21 @@ export function engineLoginHint(engine: string): string {
   return engine === "custom" || engine === "fake" ? "Check the engine with `meadow doctor`" : "Open Setup → Coding engine and click Connect (or save an API key there)";
 }
 
-/** One engine run at a time across all projects; other projects queue. */
+/** Limits concurrent holders; the rest queue in order. */
 class Semaphore {
   private queue: Array<() => void> = [];
-  private busy = false;
+  private held = 0;
+  constructor(private capacity: () => number = () => 1) {}
   async acquire(): Promise<() => void> {
-    if (this.busy) await new Promise<void>(resolve => this.queue.push(resolve));
-    this.busy = true;
+    if (this.held >= Math.max(1, this.capacity())) await new Promise<void>(resolve => this.queue.push(resolve));
+    else this.held += 1;
+    let released = false;
     return () => {
+      if (released) return;
+      released = true;
       const next = this.queue.shift();
       if (next) next();
-      else this.busy = false;
+      else this.held -= 1;
     };
   }
   get waiting() {
@@ -112,9 +124,25 @@ class Semaphore {
   }
 }
 
+/** Engine runs that may happen at once across all projects: one, or harness.parallel.maxAgents when parallel agents are on. */
+const engineCapacity = () => {
+  const parallel = loadConfig().harness.parallel;
+  return parallel?.enabled ? Math.min(8, Math.max(1, parallel.maxAgents)) : 1;
+};
+
+/** A phase running in its own git worktree as part of a parallel group. */
+type Worktree = { dir: string; mainPath: string };
+
+/** Fails while any tracked file still has merge conflict markers. */
+const CONFLICT_CHECK: Check = { kind: "cmd", cmd: "if git grep -nIE '^(<<<<<<<|>>>>>>>)( |$)'; then echo 'Merge conflict markers are still in the files above.'; exit 1; fi" };
+
+const slug = (text: string, max = 32) => text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, max);
+const phaseBranch = (phase: PlanPhase) => `meadow/phase-${phase.id}-${slug(phase.name)}`;
+export const worktreeDir = (project: Pick<ProjectRow, "id" | "name">, phase: Pick<PlanPhase, "id">) => homePath("worktrees", `${project.id}-${slug(project.name, 40) || "project"}`, `phase-${slug(String(phase.id), 20)}`);
+
 export class Harness {
   private active = new Map<number, Active>();
-  private engineSlot = new Semaphore();
+  private engineSlot = new Semaphore(engineCapacity);
 
   isActive(projectId: number) {
     return this.active.has(projectId);
@@ -182,7 +210,7 @@ export class Harness {
     } else {
       executionId = getDb().insert("executions", { project_id: projectId, plan_id: active.row.id, status: "running", engine: engineName, tokens: 0, cost_usd: 0, started_at: now() });
     }
-    const state: Active = { executionId, projectId, engine, abort: new AbortController(), pauseRequested: false, stopRequested: false, engineRunKey: null, hint: options.hint ?? null, budgetOverride: previous?.note?.startsWith("Budget") ?? false, servicesOverride: previous?.note?.startsWith("Services") ?? false, envOverride: previous?.note?.startsWith(ENV_SKIPPED_NOTE) ?? false, lastE2e: null };
+    const state: Active = { executionId, projectId, engine, abort: new AbortController(), pauseRequested: false, stopRequested: false, engineRunKeys: new Set(), hint: options.hint ?? null, budgetOverride: previous?.note?.startsWith("Budget") ?? false, servicesOverride: previous?.note?.startsWith("Services") ?? false, envOverride: previous?.note?.startsWith(ENV_SKIPPED_NOTE) ?? false, lastE2e: null, deferPark: false, pendingPark: null, previewLock: new Semaphore(), mergeLock: new Semaphore(), team: [] };
     this.active.set(projectId, state);
     startBrokerExecutor();
     this.emit(state, "execution_started", `Run started on ${engine.label}`, `${active.plan.phases.length} phases · plan v${active.row.version}`);
@@ -211,7 +239,7 @@ export class Harness {
     }
     state.stopRequested = true;
     state.abort.abort();
-    if (state.engineRunKey) await state.engine.cancel(state.engineRunKey);
+    await Promise.all([...state.engineRunKeys].map(key => state.engine.cancel(key)));
     this.emit(state, "control", "Stop requested", "Cancelling the engine and stopping the run.");
   }
 
@@ -303,6 +331,7 @@ export class Harness {
     }
 
     const ordered = executionOrder(plan.phases);
+    const done = (id: string) => ["passed", "skipped"].includes(rows.find(item => item.phase_key === id)?.status ?? "");
     for (const phase of ordered) {
       const row = rows.find(item => item.phase_key === phase.id)!;
       if (["passed", "skipped"].includes(row.status)) continue;
@@ -311,7 +340,9 @@ export class Harness {
       if (state.stopRequested) return this.finish(state, "stopped", null);
       if (state.pauseRequested) return this.park(state, row, "paused", "Paused before the next phase.");
       getDb().update("executions", state.executionId, { current_phase_id: row.id });
-      const outcome = await this.runPhase(state, project, plan, phase, row, ordered);
+      const parallel = loadConfig().harness.parallel;
+      const group = phase.parallelGroup && parallel?.enabled ? ordered.filter(item => item.parallelGroup === phase.parallelGroup && !done(item.id) && item.dependsOn.every(done)).slice(0, Math.max(1, parallel.maxAgents)) : [];
+      const outcome = group.length > 1 ? await this.runGroup(state, project, plan, group, rows, ordered) : await this.runPhase(state, project, plan, phase, row, ordered);
       if (outcome === "stopped") return this.finish(state, "stopped", null);
       if (outcome === "paused") return;
       if (outcome === "blocked") return;
@@ -329,10 +360,10 @@ export class Harness {
 
     if (accepted === "passed" && state.lastE2e) {
       const { results, runHow, url } = state.lastE2e;
-      return this.finish(state, "completed", nextRecommendation(project.id), { screenshotIds: [], runHow, url, e2e: { passed: results.filter(result => result.passed).length, total: results.length } });
+      return this.finish(state, "completed", nextRecommendation(project.id), { screenshotIds: [], runHow, url, e2e: { passed: results.filter(result => result.passed).length, total: results.length }, team: state.team });
     }
     const showcase = await this.showcase(state, project, plan);
-    this.finish(state, "completed", nextRecommendation(project.id), showcase);
+    this.finish(state, "completed", nextRecommendation(project.id), { ...showcase, team: state.team });
   }
 
   /**
@@ -357,6 +388,68 @@ export class Harness {
     getDb().update("executions", state.executionId, { current_phase_id: row.id });
     const phase = acceptancePhase(plan);
     return this.runPhase(state, project, plan, phase, row, [...ordered, phase]);
+  }
+
+  /**
+   * Phases in one parallel group: each agent works on its own branch in its own git worktree at the same time,
+   * and each passing branch is merged into the base branch. A park request waits until every agent has stopped.
+   */
+  private async runGroup(state: Active, project: ProjectRow, plan: Plan, group: PlanPhase[], rows: PhaseRow[], ordered: PlanPhase[]): Promise<PhaseOutcome> {
+    const rowOf = (phase: PlanPhase) => rows.find(item => item.phase_key === phase.id)!;
+    try {
+      const current = await git.currentBranch(project.path);
+      if (current !== project.base_branch) {
+        if (!(await git.isClean(project.path))) throw new Error(`The project is on ${current} with uncommitted changes. Roll back or commit them first.`);
+        await git.checkout(project.path, project.base_branch);
+      }
+      if (!(await git.isClean(project.path))) throw new Error(`The working tree on ${project.base_branch} has uncommitted changes (${(await git.status(project.path)).slice(0, 5).map(entry => entry.path).join(", ")}). Commit or discard them, then resume.`);
+      if (state.engine.writeRules) {
+        state.engine.writeRules(project.path, rulesFileContent(plan, projectRules(project), project.path));
+        await git.commitAll(project.path, "meadow: update engine rules");
+      }
+      const base = await git.headSha(project.path);
+      for (const phase of group) {
+        const row = rowOf(phase);
+        const branch = row.branch ?? phaseBranch(phase);
+        const dir = worktreeDir(project, phase);
+        await git.addWorktree(project.path, dir, branch, base);
+        copyEnvFiles(project.path, dir);
+        if (row.branch !== branch) this.setPhase(row, { branch });
+      }
+    } catch (error) {
+      const row = rowOf(group[0]);
+      const message = (error as Error).message;
+      this.setPhase(row, { status: "blocked" });
+      this.emit(state, "phase_blocked", `Parallel phases could not start: ${group.map(phase => phase.name).join(", ")}`, message, { phaseId: row.id, payload: { reason: "prepare", lastError: message } });
+      this.park(state, row, "blocked", message);
+      return "blocked";
+    }
+    this.emit(state, "message", `${group.length} agents working in parallel`, group.map(phase => `${roleLabel(phase.agent)}: ${phase.name}`).join("\n"), { payload: { parallel: true, phases: group.map(phase => phase.id) } });
+    state.deferPark = true;
+    let outcomes: PhaseOutcome[];
+    try {
+      outcomes = await Promise.all(group.map(phase => {
+        const row = rowOf(phase);
+        const dir = worktreeDir(project, phase);
+        return this.runPhase(state, { ...project, path: dir }, plan, phase, row, ordered, { dir, mainPath: project.path }).catch((error): PhaseOutcome => {
+          const message = (error as Error).message;
+          this.setPhase(row, { status: "blocked" });
+          this.emit(state, "phase_blocked", `Phase failed unexpectedly: ${phase.name}`, message, { phaseId: row.id, payload: { lastError: message } });
+          this.park(state, row, "blocked", `${phase.name}: ${message}`);
+          return "blocked";
+        });
+      }));
+    } finally {
+      state.deferPark = false;
+    }
+    if (outcomes.includes("stopped")) return "stopped";
+    const pending = state.pendingPark;
+    if (pending) {
+      state.pendingPark = null;
+      this.park(state, pending.phase, pending.status, pending.note);
+      return pending.status === "blocked" ? "blocked" : "paused";
+    }
+    return "passed";
   }
 
   /** The finished app, running, as a person would see it: desktop and mobile screenshots plus how to run it. */
@@ -449,15 +542,24 @@ export class Harness {
 
   private park(state: Active, phase: PhaseRow | null, status: "paused" | "waiting" | "blocked", note: string) {
     if (phase && status === "paused" && !["passed", "skipped", "pending"].includes(phase.status)) this.setPhase(phase, { status: "paused" });
+    if (state.deferPark) {
+      state.pendingPark ??= { phase, status, note };
+      return status;
+    }
     getDb().update("executions", state.executionId, { status, note });
     this.active.delete(state.projectId);
     this.emit(state, "control", status === "paused" ? "Run paused" : status === "waiting" ? "Waiting to continue" : "Run blocked", note, { phaseId: phase?.id ?? null, payload: { status } });
     return status;
   }
 
-  private async prepare(state: Active, project: ProjectRow, plan: Plan, phase: PlanPhase, row: PhaseRow): Promise<{ baseSha: string; resumed: boolean }> {
+  private async prepare(state: Active, project: ProjectRow, plan: Plan, phase: PlanPhase, row: PhaseRow, wt?: Worktree): Promise<{ baseSha: string; resumed: boolean }> {
     this.setPhase(row, { status: "preparing", started_at: row.started_at ?? now() });
-    const branchName = row.branch ?? `meadow/phase-${phase.id}-${phase.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 32)}`;
+    if (wt) {
+      const baseSha = (await git.git(wt.mainPath, "merge-base", project.base_branch, row.branch!)).trim();
+      return { baseSha, resumed: row.attempts > 0 };
+    }
+    const branchName = row.branch ?? phaseBranch(phase);
+    if (row.branch) for (const tree of await git.worktrees(project.path)) if (tree.branch === row.branch) await git.removeWorktree(project.path, tree.path);
     const current = await git.currentBranch(project.path);
     if (row.branch && (await git.branchExists(project.path, row.branch))) {
       if (current !== row.branch) {
@@ -513,7 +615,7 @@ export class Harness {
       return { ok: false, reason: "cancelled", report: "", filesTouched: 0, forbidden: [], guardNote: "" };
     }
     const runKey = `run-${runId}`;
-    state.engineRunKey = runKey;
+    state.engineRunKeys.add(runKey);
     let ok = false;
     let reason = "crashed";
     let report = "";
@@ -558,7 +660,7 @@ export class Harness {
       if (!ok && specificReason && !SPECIFIC_FAILURES.has(reason) && reason !== "cancelled") reason = specificReason;
     } finally {
       release();
-      state.engineRunKey = null;
+      state.engineRunKeys.delete(runKey);
       getDb().update("runs", runId, { status: ok ? "completed" : state.stopRequested ? "cancelled" : "failed", exit_reason: reason, finished_at: now(), tokens_in: tokensIn, tokens_out: tokensOut, cost_usd: cost, session_id: sessionId });
       getDb().run("UPDATE executions SET tokens = tokens + ?, cost_usd = cost_usd + ? WHERE id = ?", tokensIn + tokensOut, cost, state.executionId);
     }
@@ -600,20 +702,20 @@ export class Harness {
     this.emit(state, event.type, event.title, event.detail ?? "", { runId, phaseId, payload: event.reason ? { reason: event.reason } : undefined });
   }
 
-  private async runPhase(state: Active, project: ProjectRow, plan: Plan, phase: PlanPhase, row: PhaseRow, ordered: PlanPhase[]): Promise<PhaseOutcome> {
+  private async runPhase(state: Active, project: ProjectRow, plan: Plan, phase: PlanPhase, row: PhaseRow, ordered: PlanPhase[], wt?: Worktree): Promise<PhaseOutcome> {
     const config = loadConfig();
     const phaseNumber = ordered.indexOf(phase) + 1;
     let baseSha: string;
     let resumed: boolean;
     try {
-      ({ baseSha, resumed } = await this.prepare(state, project, plan, phase, row));
+      ({ baseSha, resumed } = await this.prepare(state, project, plan, phase, row, wt));
     } catch (error) {
       this.setPhase(row, { status: "blocked" });
       this.emit(state, "phase_blocked", `Phase ${phaseNumber} could not start: ${phase.name}`, (error as Error).message, { phaseId: row.id, payload: { phaseNumber, total: ordered.length, reason: "prepare", lastError: (error as Error).message } });
       this.park(state, row, "blocked", (error as Error).message);
       return "blocked";
     }
-    this.emit(state, "phase_started", `Phase ${phaseNumber} of ${ordered.length}${resumed ? " resumed" : " started"}: ${phase.name}`, `Branch ${row.branch}`, { phaseId: row.id, payload: { phaseNumber, total: ordered.length } });
+    this.emit(state, "phase_started", `Phase ${phaseNumber} of ${ordered.length}${resumed ? " resumed" : " started"}: ${phase.name}`, `${roleLabel(phase.agent)} · branch ${row.branch}${wt ? " · own worktree" : ""}`, { phaseId: row.id, payload: { phaseNumber, total: ordered.length, agent: phase.agent ?? "builder", parallel: Boolean(wt) } });
 
     const rows = phasesFor(row.plan_id);
     const previousSummaries = ordered.slice(0, ordered.indexOf(phase)).map(prev => rows.find(item => item.phase_key === prev.id)).filter(item => item?.summary).map(item => ({ name: item!.name, summary: item!.summary! }));
@@ -627,6 +729,11 @@ export class Harness {
     let engineGuardNote = "";
     let engineReport = "";
     let impactText = "";
+    const diagnoses: string[] = [];
+    let supervisorHint: string | undefined;
+    let releasePreview: (() => void) | null = null;
+    let conflictRounds = 0;
+    const parallelNote = wt ? `You are one of several agents working at the same time, each in its own git worktree. This worktree starts without installed dependencies: install them before running checks. Change only what your tasks need so your branch merges cleanly with the others.` : "";
     if (config.harness.preflightImpact) {
       try {
         const impact = preflightImpact(project.id, phase);
@@ -642,12 +749,18 @@ export class Harness {
     const extraChecks = autoChecks(project.id, phase.checks);
     let e2e: AcceptanceResult | null = null;
     let preview: PreviewHandle | null = null;
-    const needsPreview = Boolean(plan.preview && phase.checks.some(check => check.kind === "http"));
+    const needsPreview = Boolean(plan.preview && phase.checks.some(check => check.kind === "http" || check.kind === "e2e"));
 
     try {
       // Resuming a phase that already had attempts: verify what is on the branch before spending engine time.
       let skipEngine = resumed && !state.hint;
       while (true) {
+        if (wt) {
+          preview?.stop();
+          preview = null;
+          releasePreview?.();
+          releasePreview = null;
+        }
         if (state.stopRequested) {
           this.setPhase(row, { status: "stopped" });
           return "stopped";
@@ -669,10 +782,11 @@ export class Harness {
           const context = [impactText, await promptContext(project.id, project.path, `${phase.name} ${phase.tasks.join(" ")}`)].filter(Boolean).join("\n\n");
           const brief = projectBrief(project.id, lastFailure ? 2500 : 6000, phase.id);
           const prompt = lastFailure
-            ? compileFixPrompt({ plan, phase, projectPath: project.path, failing: { check: lastFailure.check, exitCode: lastFailure.exitCode, output: lastFailure.output }, hint: state.hint ?? undefined, guardFeedback, brief, attempt: { n: attemptsThisRun, max: config.harness.maxAttempts }, tailLines: lastFailure.check === E2E_CHECK ? 220 : undefined })
-            : compilePhasePrompt({ plan, phase, projectPath: project.path, projectRules: projectRules(project), previousSummaries, context, brief, guardFeedback: [guardFeedback, state.hint ? `Hint from the user: ${state.hint}` : ""].filter(Boolean).join("\n") });
+            ? compileFixPrompt({ plan, phase, projectPath: project.path, failing: { check: lastFailure.check, exitCode: lastFailure.exitCode, output: lastFailure.output }, hint: state.hint ?? undefined, supervisor: supervisorHint, guardFeedback: [guardFeedback, parallelNote].filter(Boolean).join("\n\n"), brief, attempt: { n: attemptsThisRun, max: config.harness.maxAttempts }, tailLines: lastFailure.check === E2E_CHECK ? 220 : undefined })
+            : compilePhasePrompt({ plan, phase, projectPath: project.path, projectRules: projectRules(project), previousSummaries, context, brief, guardFeedback: [guardFeedback, state.hint ? `Hint from the user: ${state.hint}` : "", parallelNote].filter(Boolean).join("\n") });
           const hintUsed = state.hint;
           state.hint = null;
+          supervisorHint = undefined;
           const result = await this.runEngine(state, project, row, prompt, lastFailure ? "fix" : "initial");
           engineReport = result.report || engineReport;
           if (state.stopRequested || result.reason === "cancelled") {
@@ -728,6 +842,7 @@ export class Harness {
           }
         }
 
+        if (wt && !releasePreview) releasePreview = await state.previewLock.acquire();
         this.setPhase(row, { status: "verifying" });
         if (needsPreview && !preview) {
           try {
@@ -736,11 +851,12 @@ export class Harness {
             this.emit(state, "error", "Preview server did not start", tail((error as Error).message, 30), { phaseId: row.id });
           }
         }
-        const outcomes = await verify([...phase.checks, ...extraChecks], {
+        const outcomes = await verify([...phase.checks, ...extraChecks, ...(conflictRounds ? [CONFLICT_CHECK] : [])], {
           cwd: project.path,
           previewUrl: preview?.url ?? null,
           phaseId: row.id,
           runId: null,
+          projectId: project.id,
           signal: state.abort.signal,
           onResult: outcome => this.emit(state, "check_result", `${outcome.passed ? "✓" : "✗"} ${outcome.label}`, outcome.passed ? `passed in ${(outcome.durationMs / 1000).toFixed(1)}s` : tail(outcome.output, 12), { phaseId: row.id, payload: { passed: outcome.passed, exitCode: outcome.exitCode } }),
         });
@@ -789,8 +905,25 @@ export class Harness {
         if (!failing && !guards.blocking) {
           preview?.stop();
           preview = null;
-          await this.pass(state, project, plan, phase, row, phaseNumber, ordered.length, baseSha, outcomes, guards.dependencyChanges, engineReport, e2e);
-          return "passed";
+          const member: TeamMember = { phase: phase.name, agent: phase.agent ?? "builder", attempts: Math.max(1, attemptsThisRun), status: "passed", notes: diagnoses };
+          const merged = await this.pass(state, project, plan, phase, row, phaseNumber, ordered.length, baseSha, outcomes, guards.dependencyChanges, engineReport, e2e, { member, wt });
+          if (merged === true) {
+            state.team.push(member);
+            return "passed";
+          }
+          const files = merged.conflicts.slice(0, 10).join(", ");
+          if (!wt || conflictRounds >= 2) {
+            const kept = wt ? await this.abandonWorktree(row, wt) : row.branch;
+            return this.block(state, row, phase, phaseNumber, ordered.length, "(its branch conflicts with work merged by another agent)", null, [], `Conflicting files: ${files}\nThe attempt was kept on ${kept}. Retry rebuilds this phase on top of the merged code.`);
+          }
+          // Like a developer would: bring main into this branch and resolve the conflicts, then merge again.
+          conflictRounds += 1;
+          baseSha = await git.headSha(wt.mainPath);
+          await git.git(wt.dir, "merge", "--no-commit", "--no-ff", project.base_branch).catch(() => undefined);
+          this.emit(state, "message", `${roleLabel(phase.agent)} is resolving a merge conflict with another agent`, `Conflicting files: ${files}`, { phaseId: row.id, payload: { conflicts: merged.conflicts } });
+          lastFailure = { check: CONFLICT_CHECK, label: `Merge ${project.base_branch} into this branch`, passed: false, exitCode: 1, output: `Another agent's work was merged into ${project.base_branch} first and conflicts with this branch in: ${files}.\nThat merge is now in progress in this worktree. Resolve every conflict marker (<<<<<<<, =======, >>>>>>>) so both agents' features keep working, keep the other agent's changes, then run the checks again. Don't abort the merge or reset the branch.`, durationMs: 0 };
+          guardFeedback = "";
+          continue;
         }
 
         lastFailure = failing ?? lastFailure;
@@ -802,21 +935,54 @@ export class Harness {
         lastSignature = signature;
         const exhausted = attemptsThisRun >= config.harness.maxAttempts;
         const stuck = (sameError && attemptsThisRun >= 2) || noChangeStreak >= 2;
+        const failShots = () => (e2e ? e2e.results.filter(item => !item.passed).flatMap(item => item.screenshots.slice(-1).map(shot => shot.id)) : []);
+        const verdict = failing ? await this.supervise(state, project, plan, phase, row, failing, { n: Math.max(1, attemptsThisRun), max: config.harness.maxAttempts }, diagnoses) : null;
+        if (state.stopRequested) {
+          this.setPhase(row, { status: "stopped" });
+          return "stopped";
+        }
+        const supervisorNote = verdict ? `Supervisor: ${verdict.diagnosis}` : "";
+        if (verdict?.action === "escalate" && attemptsThisRun >= 2) {
+          return this.block(state, row, phase, phaseNumber, ordered.length, "(the supervisor says it needs you)", failing, failShots(), supervisorNote);
+        }
         if (exhausted || stuck) {
           const why = exhausted ? `after ${attemptsThisRun} attempt${attemptsThisRun === 1 ? "" : "s"}` : sameError ? "(same error twice in a row)" : "(no file changes across two fix attempts)";
-          return this.block(state, row, phase, phaseNumber, ordered.length, why, failing, e2e ? e2e.results.filter(item => !item.passed).flatMap(item => item.screenshots.slice(-1).map(shot => shot.id)) : []);
+          return this.block(state, row, phase, phaseNumber, ordered.length, why, failing, failShots(), supervisorNote);
         }
+        supervisorHint = verdict ? [verdict.diagnosis, verdict.hint].filter(Boolean).join("\n") : undefined;
         this.emit(state, "message", attemptsThisRun === 0 ? "The branch does not pass its checks yet; starting a fix attempt" : `Attempt ${attemptsThisRun} failed; starting fix attempt ${attemptsThisRun + 1}`, failing ? `${failing.label} exited ${failing.exitCode ?? "without a code"}` : guardFeedback.split("\n")[0], { phaseId: row.id });
       }
     } finally {
       preview?.stop();
+      releasePreview?.();
     }
   }
 
-  private block(state: Active, row: PhaseRow, phase: PlanPhase, phaseNumber: number, total: number, why: string, failing: CheckOutcome | null, screenshotIds: number[] = []): PhaseOutcome {
+  /** Gives up on a parallel branch: its work is kept under failed/ and the phase starts fresh on retry. */
+  private async abandonWorktree(row: PhaseRow, wt: Worktree): Promise<string> {
+    await git.git(wt.dir, "merge", "--abort").catch(() => undefined);
+    await git.removeWorktree(wt.mainPath, wt.dir);
+    const kept = `failed/${row.branch!.replace(/^meadow\//, "")}-${Date.now()}`;
+    await git.git(wt.mainPath, "branch", "-m", row.branch!, kept).catch(() => undefined);
+    this.setPhase(row, { branch: null, attempts: 0 });
+    return kept;
+  }
+
+  /** Asks the supervisor model to diagnose a failed attempt and posts its verdict. Null when no supervisor is reachable. */
+  private async supervise(state: Active, project: ProjectRow, plan: Plan, phase: PlanPhase, row: PhaseRow, failing: CheckOutcome, attempt: { n: number; max: number }, diagnoses: string[]): Promise<SupervisorVerdict | null> {
+    if (!supervisorAvailable()) return null;
+    const verdict = await diagnoseFailure({ plan, phase, projectPath: project.path, failing: { label: failing.label, exitCode: failing.exitCode, output: failing.output }, attempt, previous: diagnoses, signal: state.abort.signal }).catch(() => null);
+    if (!verdict) return null;
+    diagnoses.push(verdict.diagnosis || verdict.hint.split("\n")[0]);
+    this.emit(state, "supervisor", `Supervisor on ${phase.name}: ${verdict.action === "escalate" ? "needs you" : "retrying with a diagnosis"}`, [verdict.diagnosis, verdict.hint ? `Next step for the ${roleLabel(phase.agent).toLowerCase()}:\n${verdict.hint}` : ""].filter(Boolean).join("\n\n"), { phaseId: row.id, payload: { action: verdict.action, by: verdict.by, agent: phase.agent ?? "builder", attempt: attempt.n } });
+    return verdict;
+  }
+
+  private block(state: Active, row: PhaseRow, phase: PlanPhase, phaseNumber: number, total: number, why: string, failing: CheckOutcome | null, screenshotIds: number[] = [], note = ""): PhaseOutcome {
     this.setPhase(row, { status: "blocked" });
-    const lastError = failing ? (failing.check === E2E_CHECK ? failing.output.split("\n").filter(line => /^(##|Failed at|Reason:)/.test(line)).slice(0, 12).join("\n") || tail(failing.output, 6) : tail(failing.output, 6)) : why;
-    this.emit(state, "phase_blocked", `Phase ${phaseNumber} is stuck ${why}: ${phase.name}`, failing ? `Failing: ${failing.label} (exit ${failing.exitCode ?? "n/a"})\n${lastError}` : why, { phaseId: row.id, payload: { phaseNumber, total, failing: failing?.label ?? null, exitCode: failing?.exitCode ?? null, lastError, attempts: row.attempts, screenshotIds } });
+    const lastError = failing ? (failing.check === E2E_CHECK ? failing.output.split("\n").filter(line => /^(##|Failed at|Reason:)/.test(line)).slice(0, 12).join("\n") || tail(failing.output, 6) : tail(failing.output, 6)) : note || why;
+    const detail = [failing ? `Failing: ${failing.label} (exit ${failing.exitCode ?? "n/a"})\n${lastError}` : "", note || (failing ? "" : why)].filter(Boolean).join("\n\n");
+    this.emit(state, "phase_blocked", `Phase ${phaseNumber} is stuck ${why}: ${phase.name}`, detail, { phaseId: row.id, payload: { phaseNumber, total, failing: failing?.label ?? null, exitCode: failing?.exitCode ?? null, lastError, attempts: row.attempts, screenshotIds, agent: phase.agent ?? "builder" } });
     this.park(state, row, "blocked", `Phase ${phaseNumber} blocked ${why}.`);
     return "blocked";
   }
@@ -838,7 +1004,7 @@ export class Harness {
     }
   }
 
-  private async pass(state: Active, project: ProjectRow, plan: Plan, phase: PlanPhase, row: PhaseRow, phaseNumber: number, total: number, baseSha: string, outcomes: CheckOutcome[], dependencyChanges: string[], engineReport: string, e2e: AcceptanceResult | null = null) {
+  private async pass(state: Active, project: ProjectRow, plan: Plan, phase: PlanPhase, row: PhaseRow, phaseNumber: number, total: number, baseSha: string, outcomes: CheckOutcome[], dependencyChanges: string[], engineReport: string, e2e: AcceptanceResult | null = null, team: { member?: TeamMember; wt?: Worktree } = {}): Promise<true | { conflicts: string[] }> {
     const diff = await git.diffStat(project.path, baseSha);
     const config = loadConfig();
     let shotIds: number[] = [];
@@ -847,15 +1013,30 @@ export class Harness {
     }
     const summary = await summarizePhase(phase, diff, outcomes, engineReport);
     const message = `meadow: phase ${phase.id} passed: ${phase.name}\n\nChecks:\n${outcomes.map(outcome => `- ${outcome.label}: ok`).join("\n")}\n\n${summary}`;
-    const sha = (await git.commitAll(project.path, message)) ?? (await git.headSha(project.path));
-    await git.fastForward(project.path, project.base_branch, row.branch!);
+    let sha = (await git.commitAll(project.path, message)) ?? (await git.headSha(project.path));
+    const wt = team.wt;
+    const main: ProjectRow = wt ? { ...project, path: wt.mainPath } : project;
+    if (wt) {
+      const release = await state.mergeLock.acquire();
+      try {
+        const merged = await git.mergeInto(wt.mainPath, project.base_branch, row.branch!, `meadow: merge phase ${phase.id}: ${phase.name}`);
+        if (!merged.ok) return { conflicts: merged.conflicts };
+        sha = merged.sha;
+      } finally {
+        release();
+      }
+      await git.removeWorktree(wt.mainPath, wt.dir);
+    } else {
+      await git.fastForward(project.path, project.base_branch, row.branch!);
+    }
     this.setPhase(row, { status: "passed", summary, commit_sha: sha, finished_at: now() });
     const additions = diff.reduce((sum, file) => sum + file.additions, 0);
     const deletions = diff.reduce((sum, file) => sum + file.deletions, 0);
     this.emit(state, "phase_passed", `Phase ${phaseNumber} of ${total} passed: ${phase.name}`, summary, {
       phaseId: row.id,
-      payload: { phaseNumber, total, checks: outcomes.map(outcome => outcome.label), files: diff.length, additions, deletions, dependencyChanges, screenshotIds: shotIds, commit: sha.slice(0, 10) },
+      payload: { phaseNumber, total, checks: outcomes.map(outcome => outcome.label), files: diff.length, additions, deletions, dependencyChanges, screenshotIds: shotIds, commit: sha.slice(0, 10), ...(team.member ? { team: team.member } : {}), parallel: Boolean(wt) },
     });
+    project = main;
     const push = await pushBase(project).catch(error => ({ pushed: false, detail: `Push failed: ${(error as Error).message}` }));
     if (push.detail) this.emit(state, push.pushed ? "message" : "guard", push.pushed ? "Pushed to GitHub" : "GitHub push skipped", push.detail, { phaseId: row.id });
     if (e2e) {
@@ -870,6 +1051,7 @@ export class Harness {
       .refresh(project.id, `phase ${phase.id} passed`, { forceGraph: true })
       .then(update => (update ? undefined : indexProject(project.id, project.path).then(() => liveGraph.markIndexed(project.id))))
       .catch(() => undefined);
+    return true;
   }
 
   /** Generate .meadow/docs/ (PRD, Design System, Architecture, Agents Guide) from the plan after completion. */
