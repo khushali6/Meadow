@@ -24,7 +24,10 @@ export function TeamPanel({ phases, events, active }: { phases: Phase[]; events:
   const lastNote = notes[notes.length - 1];
   const escalations = notes.filter(note => note.payload?.action === "escalate").length;
   const parallelGroups = [...new Set(phases.map(phase => phase.parallelGroup).filter(Boolean))];
-  const supervisorState = !supervisor ? "Checking…" : !supervisor.enabled ? "Off" : supervisor.reachable ? (supervisor.hasModel ? "Online" : "Model not pulled") : supervisor.fallback ? `Offline · using ${supervisor.fallback}` : "Offline";
+  const current = supervisor?.active ?? null;
+  const first = supervisor?.chain[0];
+  const supervisorState = !supervisor ? "Checking…" : !supervisor.enabled ? "Off" : !current ? "No model reachable" : current.provider === first?.provider ? "Online" : `Using ${current.name}`;
+  const firstProblem = first && current?.provider !== first.provider ? (first.needsKey ? `${first.name} needs ${first.needsKey} (Settings → Agent team).` : !first.reachable ? (first.provider === "ollama" ? "Start Ollama to supervise locally." : `${first.name} isn't reachable.`) : !first.hasModel ? <>Run <code>ollama pull {first.model}</code>.</> : null) : null;
 
   return (
     <section className="team-section" aria-label="Agent team">
@@ -41,8 +44,8 @@ export function TeamPanel({ phases, events, active }: { phases: Phase[]; events:
       <div className="team-grid" style={{ gridTemplateColumns: `minmax(240px, 1.2fr) repeat(${lanes.length}, minmax(0, 1fr))` }}>
         <article className="team-lane supervisor">
           <header>
-            <ActivityDot active={active && Boolean(supervisor?.reachable)} tone={supervisor?.enabled && !supervisor.reachable && !supervisor.fallback ? "error" : "idle"} />
-            <div><strong>Supervisor</strong><span>{supervisor ? `${supervisor.provider} · ${supervisor.model}` : "…"}</span></div>
+            <ActivityDot active={active && Boolean(current)} tone={supervisor?.enabled && !current ? "error" : "idle"} />
+            <div><strong>Supervisor</strong><span>{current ? `${current.name} · ${current.model}` : supervisor ? supervisor.chain.map(member => member.name).join(" → ") : "…"}</span></div>
           </header>
           <dl className="team-stats">
             <div><dt>Status</dt><dd>{supervisorState}</dd></div>
@@ -54,7 +57,8 @@ export function TeamPanel({ phases, events, active }: { phases: Phase[]; events:
               {lastNote ? <>{lastNote.detail.split("\n")[0]} <time>{relativeTime(lastNote.ts)}</time></> : supervisor?.enabled ? "Reads every failed check, tells the fix agent what to change, and stops loops that need you." : "Turn the supervisor on in Settings to get diagnoses on failures."}
             </motion.p>
           </AnimatePresence>
-          {supervisor?.enabled && !supervisor.reachable ? <p className="team-hint">Start Ollama and run <code>ollama pull {supervisor.model}</code>{supervisor.fallback ? `; until then ${supervisor.fallback} supervises.` : "."}</p> : null}
+          {supervisor?.enabled && supervisor.chain.length > 1 ? <p className="team-chain">{supervisor.chain.map(member => <span key={member.provider} className={member.provider === current?.provider ? "on" : member.reachable && member.hasModel ? undefined : "off"}>{member.name.replace(/ \(.*\)$/, "")}</span>)}</p> : null}
+          {supervisor?.enabled && firstProblem ? <p className="team-hint">{firstProblem}</p> : null}
         </article>
         {lanes.map(lane => {
           const working = lane.phases.find(phase => WORKING.has(phase.status));

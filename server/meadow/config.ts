@@ -51,8 +51,9 @@ export type MeadowConfig = {
    * project's detected typecheck/lint/test/build commands that passed the baseline. preflightImpact: show the
    * engine what a phase's changes can affect before it starts. design: web projects get the design standard in
    * every prompt and the browser tests fail pages that still look like browser defaults.
-   * supervisor: a local model (Ollama/Qwen by default) reads failed checks, gives the fix agent a diagnosis, stops
-   * hopeless loops early and writes the team report; skipped when the model is not reachable.
+   * supervisor: a model reads failed checks, gives the fix agent a diagnosis, stops hopeless loops early and writes
+   * the team report. `chain` is tried in order (unreachable or keyless providers are skipped); `models` overrides a
+   * provider's default model (Ollama picks the closest installed Qwen coder when the named one isn't pulled).
    * parallel: phases sharing a `parallel_group` run at the same time in separate git worktrees.
    */
   harness: {
@@ -65,7 +66,7 @@ export type MeadowConfig = {
     preflightImpact: boolean;
     e2e: boolean;
     design: boolean;
-    supervisor: { enabled: boolean; provider: ProviderId; model: string };
+    supervisor: { enabled: boolean; chain: ProviderId[]; models: Partial<Record<ProviderId, string>> };
     parallel: { enabled: boolean; maxAgents: number };
   };
   budget: { phaseTokens: number; dailyTokens: number; phaseWallClockS: number };
@@ -121,7 +122,7 @@ export const DEFAULT_CONFIG: MeadowConfig = {
   },
   memory: { embeddings: "local", embeddingProvider: null },
   engine: { default: "cursor", model: null, models: {}, runTimeoutS: 45 * 60, noOutputTimeoutS: 5 * 60, claudeUseFreeLlmApi: false, custom: { label: "Custom command", command: "" } },
-  harness: { maxAttempts: 3, checkTimeoutS: 600, massDeleteThreshold: 20, phaseGate: "auto", autoResume: false, autoVerify: true, preflightImpact: true, e2e: true, design: true, supervisor: { enabled: true, provider: "ollama", model: "qwen2.5-coder:7b" }, parallel: { enabled: true, maxAgents: 3 } },
+  harness: { maxAttempts: 3, checkTimeoutS: 600, massDeleteThreshold: 20, phaseGate: "auto", autoResume: false, autoVerify: true, preflightImpact: true, e2e: true, design: true, supervisor: { enabled: true, chain: ["ollama", "freellmapi", "anthropic"], models: { ollama: "qwen2.5-coder:7b" } }, parallel: { enabled: true, maxAgents: 3 } },
   budget: { phaseTokens: 2_000_000, dailyTokens: 20_000_000, phaseWallClockS: 90 * 60 },
   telegram: { mode: "hosted", relayUrl: "", ownerId: null, notificationLevel: "all", quietHours: { enabled: false, start: 22, end: 8 }, voiceReplies: false },
   screenshots: { enabled: true },
@@ -172,10 +173,19 @@ function envOverrides(config: MeadowConfig): MeadowConfig {
   if (env.MEADOW_UPDATE_URL) next.updates.url = env.MEADOW_UPDATE_URL;
   if (env.MEADOW_RELAY_URL) next.telegram.relayUrl = env.MEADOW_RELAY_URL;
   if (env.MEADOW_ENGINE) next.engine.default = env.MEADOW_ENGINE as EngineName;
-  if (env.MEADOW_SUPERVISOR_PROVIDER) next.harness.supervisor.provider = env.MEADOW_SUPERVISOR_PROVIDER as ProviderId;
-  if (env.MEADOW_SUPERVISOR_MODEL) next.harness.supervisor.model = env.MEADOW_SUPERVISOR_MODEL;
+  if (env.MEADOW_SUPERVISOR_PROVIDER) next.harness.supervisor.chain = env.MEADOW_SUPERVISOR_PROVIDER.split(",").map(item => item.trim()).filter(Boolean) as ProviderId[];
+  if (env.MEADOW_SUPERVISOR_MODEL) next.harness.supervisor.models = { ...next.harness.supervisor.models, [next.harness.supervisor.chain[0]]: env.MEADOW_SUPERVISOR_MODEL };
   if (env.MEADOW_SUPERVISOR === "off") next.harness.supervisor.enabled = false;
   return next;
+}
+
+/** Configs saved with the older single `provider`/`model` supervisor setting put that provider first in the chain. */
+function upgradeSupervisor(config: MeadowConfig): MeadowConfig {
+  const legacy = config.harness.supervisor as MeadowConfig["harness"]["supervisor"] & { provider?: ProviderId; model?: string };
+  if (!legacy.provider) return config;
+  const { provider, model, ...rest } = legacy;
+  config.harness.supervisor = { ...rest, chain: [provider, ...rest.chain.filter(id => id !== provider)], models: model ? { ...rest.models, [provider]: model } : rest.models };
+  return config;
 }
 
 let cached: MeadowConfig | null = null;
@@ -188,7 +198,7 @@ export function loadConfig(): MeadowConfig {
   } catch {
     fileConfig = {};
   }
-  cached = envOverrides(deepMerge(DEFAULT_CONFIG, fileConfig));
+  cached = envOverrides(upgradeSupervisor(deepMerge(DEFAULT_CONFIG, fileConfig)));
   cached.projectsDir = cached.projectsDir.replace(/^~(?=$|\/)/, os.homedir());
   return cached;
 }
@@ -200,7 +210,7 @@ export function saveConfig(patch: unknown): MeadowConfig {
   } catch {
     fileConfig = {};
   }
-  const merged = deepMerge(deepMerge(DEFAULT_CONFIG, fileConfig), patch);
+  const merged = deepMerge(upgradeSupervisor(deepMerge(DEFAULT_CONFIG, fileConfig)), patch);
   fs.mkdirSync(meadowHome(), { recursive: true, mode: 0o700 });
   fs.writeFileSync(homePath("config.json"), JSON.stringify(merged, null, 2), { mode: 0o600 });
   cached = null;

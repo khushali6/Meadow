@@ -1,5 +1,6 @@
 import { loadConfig, type ProviderId } from "../config";
 import { redact, tail } from "../core/redact";
+import { isConfigured, PROVIDERS, resolveProvider } from "../llm/catalog";
 import { chatProviderId, providerFor } from "../llm/router";
 import type { ChatMessage, ChatOptions, ChatResult } from "../llm/types";
 import type { Plan, PlanPhase } from "../planning/format";
@@ -9,13 +10,16 @@ export type SupervisorVerdict = { action: "retry" | "escalate"; diagnosis: strin
 type SupervisorClient = { label: string; chat: (messages: ChatMessage[], options: ChatOptions) => Promise<ChatResult> };
 
 let override: SupervisorClient | null | undefined;
-let offlineUntil = 0;
+const offlineUntil = new Map<ProviderId, number>();
 
 /** Tests inject a fake model here; `undefined` restores the configured one. */
 export function setSupervisorClient(client: SupervisorClient | null | undefined) {
   override = client;
-  offlineUntil = 0;
+  offlineUntil.clear();
 }
+
+/** Providers that serve whatever models are installed locally, so the name is matched against what's pulled. */
+const MODEL_HOSTS = new Set<ProviderId>(["ollama", "lmstudio"]);
 
 /**
  * The configured model when the provider has it; otherwise the closest installed Qwen coder model (mid-size first,
@@ -30,47 +34,68 @@ export function pickSupervisorModel(configured: string, installed: string[]): st
   return coder[0] ?? qwen[0] ?? configured;
 }
 
-let installedCache: { at: number; provider: string; names: string[] | null } | null = null;
+const installedCache = new Map<ProviderId, { at: number; names: string[] | null }>();
 
+/** The provider's model list, or null when it doesn't answer within 2.5 s. Cached for a minute. */
 async function installedModels(provider: ProviderId): Promise<string[] | null> {
-  if (installedCache && installedCache.provider === provider && Date.now() - installedCache.at < 60_000) return installedCache.names;
+  const cached = installedCache.get(provider);
+  if (cached && Date.now() - cached.at < 60_000) return cached.names;
   const names = await Promise.race([providerFor(provider).models(), new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 2500))]).catch(() => null);
-  installedCache = { at: Date.now(), provider, names };
+  installedCache.set(provider, { at: Date.now(), names });
   return names;
 }
 
-async function supervisorModel(): Promise<string> {
-  const config = loadConfig().harness.supervisor;
-  return pickSupervisorModel(config.model, (await installedModels(config.provider)) ?? []);
+function ready(id: ProviderId): boolean {
+  try {
+    return isConfigured(id);
+  } catch {
+    return false;
+  }
 }
 
-/** The configured local model first (Ollama/Qwen), then the main agent model. Off under tests unless injected. */
-function clients(): Array<SupervisorClient & { primary: boolean }> {
-  if (override !== undefined) return override ? [{ ...override, primary: true }] : [];
-  if (process.env.VITEST) return [];
+/** The model the supervisor uses on a provider: the configured one, the provider's default, or (Ollama/LM Studio) the closest installed match. */
+async function modelFor(id: ProviderId): Promise<string> {
+  const configured = loadConfig().harness.supervisor.models?.[id];
+  if (MODEL_HOSTS.has(id)) return pickSupervisorModel(configured || "qwen2.5-coder:7b", (await installedModels(id)) ?? []);
+  return configured || resolveProvider(id).model;
+}
+
+/** The chain, in order, without providers that need a key that isn't set. The main agent provider is the last resort. */
+function chain(): ProviderId[] {
   const config = loadConfig().harness.supervisor;
-  if (!config?.enabled) return [];
-  const list: Array<SupervisorClient & { primary: boolean }> = [];
-  if (Date.now() >= offlineUntil) list.push({ label: config.provider, primary: true, chat: async (messages, options) => providerFor(config.provider).chat(messages, { ...options, model: await supervisorModel() }) });
-  const main = chatProviderId();
-  if (main !== config.provider) list.push({ label: main, primary: false, chat: (messages, options) => providerFor(main).chat(messages, options) });
-  return list;
+  const ids = [...new Set([...(config.chain ?? []), chatProviderId()])].filter(id => PROVIDERS[id]);
+  return ids.filter(ready);
+}
+
+/** Supervisor clients to try in order. Off under tests unless one is injected. */
+function clients(): Array<SupervisorClient & { id?: ProviderId }> {
+  if (override !== undefined) return override ? [override] : [];
+  if (process.env.VITEST) return [];
+  if (!loadConfig().harness.supervisor?.enabled) return [];
+  return chain()
+    .filter(id => Date.now() >= (offlineUntil.get(id) ?? 0))
+    .map(id => ({ id, label: id, chat: async (messages: ChatMessage[], options: ChatOptions) => providerFor(id).chat(messages, { ...options, model: await modelFor(id) }) }));
 }
 
 export function supervisorAvailable(): boolean {
   return clients().length > 0;
 }
 
-/** What the dashboard shows about the team: the supervisor model (and whether it answers) and the parallel-agent setting. */
+/** What the dashboard shows about the team: each supervisor in the chain (and whether it answers) and the parallel-agent setting. */
 export async function teamStatus() {
   const config = loadConfig().harness;
   const supervisor = config.supervisor;
-  const installed = supervisor.enabled ? await installedModels(supervisor.provider) : null;
-  const reachable = installed !== null;
-  const model = pickSupervisorModel(supervisor.model, installed ?? []);
-  const hasModel = reachable && (installed!.length === 0 || installed!.some(name => name === model || name === `${model}:latest`));
+  const ids = [...new Set([...(supervisor.chain ?? []), chatProviderId()])].filter(id => PROVIDERS[id]);
+  const members = await Promise.all(ids.map(async id => {
+    const configured = ready(id);
+    const installed = supervisor.enabled && configured ? await installedModels(id) : null;
+    const model = configured ? await modelFor(id) : supervisor.models?.[id] || PROVIDERS[id].defaults.model;
+    const hasModel = installed !== null && (!MODEL_HOSTS.has(id) || installed.length === 0 || installed.some(name => name === model || name === `${model}:latest`));
+    return { provider: id, name: PROVIDERS[id].name, model, configured, reachable: installed !== null, hasModel, needsKey: !configured && PROVIDERS[id].keyRequired ? PROVIDERS[id].secret : null };
+  }));
+  const active = members.find(member => member.reachable && member.hasModel) ?? null;
   return {
-    supervisor: { enabled: supervisor.enabled, provider: supervisor.provider, model, configuredModel: supervisor.model, reachable, hasModel, fallback: chatProviderId() !== supervisor.provider ? chatProviderId() : null },
+    supervisor: { enabled: supervisor.enabled, active, chain: members },
     parallel: config.parallel,
     roles: ["backend", "ui", "qa"].map(role => ({ role, label: roleLabel(role) })),
   };
@@ -81,10 +106,10 @@ async function ask(messages: ChatMessage[], signal?: AbortSignal): Promise<{ tex
     if (signal?.aborted) return null;
     try {
       const timeout = AbortSignal.timeout(90_000);
-      const reply = await client.chat(messages, { maxTokens: 500, temperature: 0.1, json: true, signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
-      if (reply.text.trim()) return { text: reply.text, by: client.primary && reply.model && override === undefined ? `${client.label} ${reply.model}` : client.label };
+      const reply = await client.chat(messages, { maxTokens: 600, temperature: 0.1, json: true, signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
+      if (reply.text.trim()) return { text: reply.text, by: override === undefined && reply.model ? `${client.label} ${reply.model}` : client.label };
     } catch {
-      if (client.primary) offlineUntil = Date.now() + 5 * 60_000;
+      if (client.id) offlineUntil.set(client.id, Date.now() + 5 * 60_000);
     }
   }
   return null;

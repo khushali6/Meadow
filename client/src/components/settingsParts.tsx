@@ -38,7 +38,7 @@ export type SecretName = Parameters<ReturnType<typeof trpc.setSecret.useMutation
 export function SecretField({ name, present, label, placeholder }: { name: SecretName; present: boolean; label: string; placeholder: string }) {
   const utils = trpc.useUtils();
   const [value, setValue] = useState("");
-  const save = trpc.setSecret.useMutation({ onSuccess: () => { setValue(""); utils.settings.invalidate(); utils.llmStatus.invalidate(); utils.llm.providers.invalidate(); utils.overview.invalidate(); utils.doctor.invalidate(); utils.atlas.status.invalidate(); } });
+  const save = trpc.setSecret.useMutation({ onSuccess: () => { setValue(""); utils.settings.invalidate(); utils.llmStatus.invalidate(); utils.llm.providers.invalidate(); utils.overview.invalidate(); utils.doctor.invalidate(); utils.atlas.status.invalidate(); utils.teamStatus.invalidate(); } });
   return (
     <div className="secret-field">
       <Row label={label} hint={present ? "Stored in ~/.meadow/secrets.env (owner-only file). Never shown again." : "Not set"}>

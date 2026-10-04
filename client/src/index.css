@@ -651,6 +651,12 @@ code, pre, kbd, .plan-editor, .code-block, .event-detail pre { font-family: var(
 .team-note.small { font-size: 12px; color: var(--muted); border-left: 2px solid var(--sun); padding-left: 8px; }
 .team-hint { margin: 0; font-size: 12px; color: var(--muted); }
 .team-hint code { font: 11px var(--mono); background: var(--paper); border: 1px solid var(--line); padding: 1px 4px; }
+.team-chain { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font: 11px var(--mono); color: var(--muted); }
+.team-chain > span + span::before { content: "→"; margin-right: 6px; color: var(--line); }
+.team-chain .on { color: var(--ink); }
+.team-chain .off { text-decoration: line-through; opacity: .6; }
+.team-chain em { font-style: normal; color: var(--ink); }
+.supervisor-provider .text-input { max-width: 200px; }
 .team-phases { list-style: none; margin: 0; padding: 0; display: grid; }
 .team-phases li { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 13px; }
 .team-phases li.current .team-phase-index { color: var(--sun); }

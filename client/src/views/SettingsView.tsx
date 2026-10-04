@@ -190,6 +190,44 @@ function SelfHealing() {
   );
 }
 
+type SupervisorConfig = Settings["config"]["harness"]["supervisor"];
+type SupervisorProvider = SupervisorConfig["chain"][number];
+
+const SUPERVISOR_OPTIONS: Array<{ id: SupervisorProvider; label: string; placeholder: string; hint: string }> = [
+  { id: "ollama", label: "Ollama", placeholder: "qwen2.5-coder:7b", hint: "Free and private. Uses the closest Qwen coder model you've pulled." },
+  { id: "freellmapi", label: "FreeLLMAPI", placeholder: "auto", hint: "Your local FreeLLMAPI gateway; 'auto' lets it route." },
+  { id: "anthropic", label: "Claude (Anthropic)", placeholder: "claude-sonnet-4-5", hint: "Paid cloud API, billed to your Anthropic key." },
+];
+
+function SupervisorChain({ supervisor, patch }: { supervisor: SupervisorConfig; patch: (value: Patch) => void }) {
+  const status = trpc.teamStatus.useQuery(undefined, { refetchOnWindowFocus: false });
+  const chain = supervisor.chain;
+  const members = status.data?.supervisor.chain ?? [];
+  const setChain = (next: SupervisorProvider[]) => patch({ harness: { supervisor: { chain: next } } });
+  return (
+    <>
+      <Row label="Order" hint="Tried top to bottom; a provider that is down or has no key is skipped. Your agent model is always the last resort.">
+        <span className="team-chain">{chain.length ? chain.map(id => SUPERVISOR_OPTIONS.find(option => option.id === id)?.label ?? id).join(" → ") : "Agent model only"}{status.data?.supervisor.active ? <em> · now: {status.data.supervisor.active.name} {status.data.supervisor.active.model}</em> : null}</span>
+      </Row>
+      {SUPERVISOR_OPTIONS.map(option => {
+        const on = chain.includes(option.id);
+        const member = members.find(item => item.provider === option.id);
+        const state = !on ? "Off" : !member ? "…" : member.needsKey ? "Needs key" : !member.reachable ? "Not reachable" : !member.hasModel ? "Model not pulled" : "Ready";
+        return (
+          <div key={option.id} className="supervisor-provider">
+            <Row label={`${option.label} · ${state}`} hint={option.hint}>
+              <Toggle checked={on} onChange={value => setChain(value ? [...chain, option.id] : chain.filter(id => id !== option.id))} label={`Use ${option.label} as supervisor`} />
+              <input key={supervisor.models[option.id] ?? ""} className="text-input" placeholder={option.placeholder} defaultValue={supervisor.models[option.id] ?? ""} aria-label={`${option.label} supervisor model`} onBlur={event => { const model = event.target.value.trim(); if (model !== (supervisor.models[option.id] ?? "")) patch({ harness: { supervisor: { models: { [option.id]: model } } } }); }} />
+              {on && chain[0] !== option.id ? <MotionButton className="button secondary" onClick={() => setChain([option.id, ...chain.filter(id => id !== option.id)])}>Make first</MotionButton> : null}
+            </Row>
+            {on && member?.needsKey ? <SecretField name={member.needsKey as SecretName} present={false} label={`${option.label} API key`} placeholder={option.id === "anthropic" ? "sk-ant-… from console.anthropic.com" : "The unified key from the FreeLLMAPI Keys page"} /> : null}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
 export function SettingsView({ settings, overview, project, onNavigate }: { settings: Settings | undefined; overview: Overview | undefined; project: ProjectSummary | undefined; onNavigate: (path: string) => void }) {
   const utils = trpc.useUtils();
   const update = trpc.updateSettings.useMutation({ onSuccess: data => utils.settings.setData(undefined, data) });
@@ -238,14 +276,9 @@ export function SettingsView({ settings, overview, project, onNavigate }: { sett
         <Row label="Approvals expire after" hint="Expired approvals are always denied."><NumberInput value={config.approvals.expiryS} min={60} suffix="s" onCommit={value => patch({ approvals: { expiryS: value } })} /></Row>
       </Section>
 
-      <Section title="Agent team" description="Specialist agents (backend, UI, QA) work in your coding engine; a local supervisor model reads their failures and reports to you on Telegram.">
-        <Row label="Supervisor" hint="After a failed attempt the supervisor diagnoses the cause, gives the fix agent concrete instructions, and stops early when only you can unblock it. It never sees your .env values. If the model isn't reachable, the agent model above supervises instead."><Toggle checked={config.harness.supervisor.enabled} onChange={value => patch({ harness: { supervisor: { enabled: value } } })} label="Supervisor" /></Row>
-        <Row label="Supervisor model" hint="Default: Qwen 2.5 Coder on Ollama (run `ollama pull qwen2.5-coder:7b`).">
-          <select value={config.harness.supervisor.provider} onChange={event => patch({ harness: { supervisor: { provider: event.target.value as typeof config.harness.supervisor.provider } } })}>
-            {(["ollama", "lmstudio", "freellmapi", "openai", "gemini", "anthropic", "openrouter", "custom"] as const).map(id => <option key={id} value={id}>{id}</option>)}
-          </select>
-          <input key={config.harness.supervisor.model} className="text-input" defaultValue={config.harness.supervisor.model} aria-label="Supervisor model name" onBlur={event => { const model = event.target.value.trim(); if (model && model !== config.harness.supervisor.model) patch({ harness: { supervisor: { model } } }); }} />
-        </Row>
+      <Section title="Agent team" description="Specialist agents (backend, UI, QA) work in your coding engine; a supervisor model reads their failures and reports to you on Telegram.">
+        <Row label="Supervisor" hint="After a failed attempt the supervisor diagnoses the cause, gives the fix agent concrete instructions, and stops early when only you can unblock it. It gets the failing check output with secrets and .env values removed."><Toggle checked={config.harness.supervisor.enabled} onChange={value => patch({ harness: { supervisor: { enabled: value } } })} label="Supervisor" /></Row>
+        {config.harness.supervisor.enabled ? <SupervisorChain supervisor={config.harness.supervisor} patch={patch} /> : null}
         <Row label="Parallel agents" hint="Phases the plan marks with the same parallel_group run at the same time, each in its own git worktree, then merge into main. A conflicting agent merges main into its branch and resolves the conflict itself."><Toggle checked={config.harness.parallel.enabled} onChange={value => patch({ harness: { parallel: { enabled: value } } })} label="Parallel agents" /></Row>
         <Row label="Agents at once"><NumberInput value={config.harness.parallel.maxAgents} min={1} onCommit={value => patch({ harness: { parallel: { maxAgents: Math.min(8, value) } } })} /></Row>
       </Section>
