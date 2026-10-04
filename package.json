@@ -90,7 +90,8 @@
     "README.md",
     "SECURITY.md",
     "LICENSE",
-    "docs/EDGE-CASES.md"
+    "docs/EDGE-CASES.md",
+    "docs/GUIDE.md"
   ],
   "os": [
     "darwin",
