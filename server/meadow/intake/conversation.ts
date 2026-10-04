@@ -8,7 +8,7 @@ import { getDb, now } from "../core/db";
 import { slugify } from "../core/paths";
 import { redact } from "../core/redact";
 import { engineInfo, selectableEngines } from "../engines/registry";
-import { harness } from "../harness/runner";
+import { ENV_SKIPPED_NOTE, harness } from "../harness/runner";
 import { formatErrors, parsePlan } from "../planning/format";
 import { addNote, approvePlan, createProject, findProject, getPlan, getProject, latestPlan, listProjects, planOrigin, savePlanVersion, updateProject } from "../projects";
 import { indexMemory, indexProject, search } from "../rag/index";
@@ -553,6 +553,13 @@ async function routeAction(state: ConversationState, action: string, actor: stri
     case "rollback_confirm":
       state.activeProjectId = id;
       return control(state, verb, id);
+    case "envskip": {
+      state.activeProjectId = id;
+      const latest = harness.latestExecution(id);
+      if (latest && ["waiting", "paused", "blocked", "interrupted"].includes(latest.status)) getDb().update("executions", latest.id, { note: ENV_SKIPPED_NOTE });
+      await harness.start(id);
+      return { text: "Continuing without the missing environment variables. The app will show a clear message where they're needed; fill them in later and the features start working." };
+    }
     case "retryhint":
       state.stage = "awaiting_hint";
       state.hintProjectId = id;

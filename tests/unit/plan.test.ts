@@ -126,6 +126,31 @@ ui:
     expect(result.warnings.some(w => /animation/i.test(w.message))).toBe(true);
   });
 
+  it("parses env as a list or as required/optional with hints", () => {
+    const asList = parsePlan(SPEC_EXAMPLE.replace("stack: [nextjs, typescript, sqlite]", "stack: [nextjs, typescript, sqlite]\nenv: [OPENAI_API_KEY]"));
+    expect(asList.ok && asList.plan.env).toEqual({ required: [{ name: "OPENAI_API_KEY", hint: "" }], optional: [] });
+    const asMap = parsePlan(SPEC_EXAMPLE.replace("stack: [nextjs, typescript, sqlite]", `stack: [nextjs, typescript, sqlite]
+env:
+  required:
+    - FREELLM_API_KEY: "freellmapi.com dashboard"
+  optional:
+    - SENTRY_DSN`));
+    expect(asMap.ok && asMap.plan.env).toEqual({ required: [{ name: "FREELLM_API_KEY", hint: "freellmapi.com dashboard" }], optional: [{ name: "SENTRY_DSN", hint: "" }] });
+    const none = parsePlan(SPEC_EXAMPLE);
+    expect(none.ok && none.plan.env).toEqual({ required: [], optional: [] });
+    expect(parsePlan(SPEC_EXAMPLE.replace("stack: [nextjs, typescript, sqlite]", "stack: [nextjs, typescript, sqlite]\nenv: [lower-case]")).errors[0].field).toBe("env");
+  });
+
+  it("parses agent roles and ui_gate per phase", () => {
+    const result = parsePlan(SPEC_EXAMPLE.replace("    name: Menu and cart\n", "    name: Menu and cart\n    agent: qa\n    ui_gate: false\n"));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.plan.phases[1].agent).toBe("qa");
+    expect(result.plan.phases[1].uiGate).toBe(false);
+    expect(result.plan.phases[0].agent).toBeUndefined();
+    expect(parsePlan(SPEC_EXAMPLE.replace("    name: Menu and cart\n", "    name: Menu and cart\n    agent: designer\n")).errors[0].message).toMatch(/Unknown agent "designer"/);
+  });
+
   it("returns ui: null when the field is absent", () => {
     const result = parsePlan(SPEC_EXAMPLE);
     expect(result.ok).toBe(true);

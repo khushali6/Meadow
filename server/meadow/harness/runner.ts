@@ -34,6 +34,8 @@ import { classifyCommand, classifyMcpCall, type Verdict } from "../guard/policy"
 import { compileFixPrompt, compilePhasePrompt, rulesFileContent } from "./prompts";
 import { generateProjectDocs } from "./docs";
 import { generateUiDesignBrief, isWebPlan } from "./design";
+import { ENV_FILE, missingEnv, writeEnvScaffold } from "./env";
+import { runDesignReview, touchesUi, uiGateApplies } from "./uigate";
 import { summarizePhase } from "./summarize";
 import { verify, type CheckOutcome } from "./verifier";
 
@@ -66,10 +68,14 @@ type Active = {
   hint: string | null;
   budgetOverride: boolean;
   servicesOverride: boolean;
+  envOverride: boolean;
   lastE2e: { results: CaseResult[]; runHow: string | null; url: string | null } | null;
 };
 
 type PhaseOutcome = "passed" | "blocked" | "paused" | "stopped";
+
+/** Execution note that makes the next resume build without the missing environment variables. */
+export const ENV_SKIPPED_NOTE = "Env skipped by the user.";
 
 const RESUMABLE: ExecutionStatus[] = ["paused", "waiting", "blocked", "interrupted"];
 const SPECIFIC_FAILURES = new Set(["auth", "missing_binary", "model_unavailable", "rate_limited"]);
@@ -176,7 +182,7 @@ export class Harness {
     } else {
       executionId = getDb().insert("executions", { project_id: projectId, plan_id: active.row.id, status: "running", engine: engineName, tokens: 0, cost_usd: 0, started_at: now() });
     }
-    const state: Active = { executionId, projectId, engine, abort: new AbortController(), pauseRequested: false, stopRequested: false, engineRunKey: null, hint: options.hint ?? null, budgetOverride: previous?.note?.startsWith("Budget") ?? false, servicesOverride: previous?.note?.startsWith("Services") ?? false, lastE2e: null };
+    const state: Active = { executionId, projectId, engine, abort: new AbortController(), pauseRequested: false, stopRequested: false, engineRunKey: null, hint: options.hint ?? null, budgetOverride: previous?.note?.startsWith("Budget") ?? false, servicesOverride: previous?.note?.startsWith("Services") ?? false, envOverride: previous?.note?.startsWith(ENV_SKIPPED_NOTE) ?? false, lastE2e: null };
     this.active.set(projectId, state);
     startBrokerExecutor();
     this.emit(state, "execution_started", `Run started on ${engine.label}`, `${active.plan.phases.length} phases · plan v${active.row.version}`);
@@ -281,6 +287,7 @@ export class Harness {
     if (repo.status === "created") this.emit(state, "message", "Created a private GitHub repository", `${repo.detail}${repo.url ? `\n${repo.url}` : ""}`);
     const rows = phasesFor(planId);
     if ((await this.servicesGate(state, project, plan, rows)) === "parked") return;
+    if ((await this.envGate(state, project, plan)) === "parked") return;
 
     // Generate a unique per-project design brief from plan.ui.prompt before any phase runs.
     if (plan.ui?.prompt && isWebPlan(plan)) {
@@ -400,6 +407,43 @@ export class Harness {
       this.emit(state, "setup", needsLogin ? `${name} needs a one-time sign-in` : `${name} isn't available`, `${service?.detail ?? `${name} isn't connected in Cursor.`} ${service?.fix ?? `Connect ${name} in Cursor Settings → MCP.`}\nThe run continues when you resume.`, { payload: { service: name, needsLogin, ok: false } });
     }
     this.park(state, null, "waiting", `Services: ${names} not ready. Sign in and resume, or resume to build without them.`);
+    return "parked";
+  }
+
+  /**
+   * Before any phase: every required environment variable in the plan must have a value in .env.local.
+   * Meadow writes empty placeholders and waits; the user fills them in. Meadow only checks that a value is set.
+   */
+  private async envGate(state: Active, project: ProjectRow, plan: Plan): Promise<"ok" | "parked"> {
+    if (!plan.env?.required.length && !plan.env?.optional.length) return "ok";
+    try {
+      const changed = writeEnvScaffold(project.path, plan);
+      const isIgnored = (file: string) => git.git(project.path, "check-ignore", "-q", file).then(() => true, () => false);
+      if (!(await isIgnored(ENV_FILE))) throw new Error(`${ENV_FILE} is not gitignored; refusing to commit anything until it is.`);
+      const tracked: string[] = [];
+      for (const file of changed) if (!(await isIgnored(file))) tracked.push(file);
+      if (tracked.length) {
+        await git.git(project.path, "add", "--", ...tracked);
+        await git.git(project.path, "commit", "-q", "-m", `meadow: declare environment variables in ${tracked.join(", ")}`, "--", ...tracked);
+      }
+    } catch (error) {
+      this.emit(state, "guard", "Couldn't prepare the environment files", (error as Error).message.slice(0, 500));
+    }
+    const missing = missingEnv(project.path, plan);
+    const file = path.join(project.path, ENV_FILE);
+    if (!missing.length) {
+      this.emit(state, "message", "Environment variables ready", `${plan.env.required.length} required variable${plan.env.required.length === 1 ? "" : "s"} set in ${ENV_FILE}.`);
+      return "ok";
+    }
+    const names = missing.map(item => item.name).join(", ");
+    if (state.envOverride) {
+      state.hint = [state.hint, `These environment variables are still empty in ${ENV_FILE}: ${names}. Build so the app still starts without them and shows a clear "not configured" message where they're needed; tests must not need the real values.`].filter(Boolean).join("\n");
+      this.emit(state, "message", `Building without ${names}`, "The app will show a clear message where these are needed until you fill them in.");
+      return "ok";
+    }
+    const list = missing.map(item => `- ${item.name}${item.hint ? ` — ${item.hint}` : ""}`).join("\n");
+    this.emit(state, "setup", `${missing.length} environment variable${missing.length === 1 ? "" : "s"} needed`, `Open ${file} and fill in:\n${list}\n\nThe file is gitignored and only readable by you. Meadow checks that each value is set but never reads it into logs, prompts or chat.`, { payload: { service: "env", env: missing.map(item => item.name), ok: false } });
+    this.park(state, null, "waiting", `Env: fill in ${names} in ${ENV_FILE}, then resume.`);
     return "parked";
   }
 
@@ -720,6 +764,26 @@ export class Harness {
           this.emit(state, "check_result", `${result.passed ? "✓" : "✗"} ${result.label}`, result.passed ? result.output : tail(result.output, 12), { phaseId: row.id, payload: { passed: result.passed, exitCode: result.exitCode } });
           outcomes.push(result);
           if (!result.passed) failing = result;
+        }
+
+        if (!failing && !guards.blocking && !isAcceptance && uiGateApplies(plan, phase)) {
+          const touched = (await git.diffStat(project.path, baseSha)).map(file => file.path);
+          if (touchesUi(touched)) {
+            if (!preview) {
+              preview = await startPreview(plan.preview!, project.path).catch(error => {
+                this.emit(state, "error", "Design review skipped: the preview server did not start", tail((error as Error).message, 30), { phaseId: row.id });
+                return null;
+              });
+            }
+            if (preview) {
+              this.emit(state, "message", "Reviewing the design in a browser", `Desktop and phone width on ${plan.preview!.routes.slice(0, 3).join(", ")}`, { phaseId: row.id });
+              const review = await runDesignReview({ baseUrl: preview.url, routes: plan.preview!.routes });
+              getDb().insert("checks", { phase_id: row.id, run_id: null, label: review.label, command: review.label, exit_code: review.exitCode, passed: review.passed ? 1 : 0, output_tail: tail(review.output, 80), duration_ms: review.durationMs, ts: now() });
+              this.emit(state, "check_result", `${review.passed ? "✓" : "✗"} ${review.label}`, review.passed ? review.output : tail(review.output, 12), { phaseId: row.id, payload: { passed: review.passed, exitCode: review.exitCode } });
+              outcomes.push(review);
+              if (!review.passed) failing = review;
+            }
+          }
         }
 
         if (!failing && !guards.blocking) {

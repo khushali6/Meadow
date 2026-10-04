@@ -3,13 +3,15 @@ import path from "node:path";
 import { homePath } from "../config";
 import { redact, tail } from "../core/redact";
 import { untrusted, UNTRUSTED_RULE } from "../brief/brief";
-import { checkLabel, type Check, type Plan, type PlanPhase } from "../planning/format";
+import { checkLabel, type AgentRole, type Check, type Plan, type PlanPhase } from "../planning/format";
 import { POLICY_PROMPT } from "../guard/policy";
+import { E2E_FILE, E2E_FORMAT } from "../visual/e2e";
 import { designSection } from "./design";
 
 export const PHASE_TEMPLATE = `# Role
 You are working inside an existing git repository on a branch dedicated to this phase.
 Work only inside this repository. Do not touch files outside it.
+{agent_role}
 
 # Project goal
 {goal}
@@ -52,6 +54,7 @@ These must all pass before you finish:
 
 export const FIX_TEMPLATE = `# Context
 Same repository and branch. The previous attempt did not pass verification.
+{agent_role}
 Phase: {phase_name} (attempt {attempt})
 Tasks:
 {tasks_as_checklist}
@@ -100,6 +103,35 @@ export function checkAsCommand(check: Check, previewUrl?: string): string {
   return `- GET ${url} returns ${check.expectStatus} (start the dev server with the preview command to test it)`;
 }
 
+const AGENT_ROLE_TEXT: Record<AgentRole, string> = {
+  backend: `You are the backend engineer on this team. You own the server, API, data model, validation and error handling.
+- Every endpoint validates its input, returns JSON with correct status codes, and never leaks stack traces or secrets.
+- Every endpoint gets tests for the happy path and for invalid input.
+- Read configuration from environment variables; when one is missing, fail with a clear message instead of crashing.
+- Don't restyle the UI; only wire it to your API where the tasks need it.`,
+  ui: `You are the UI engineer on this team. You own the screens, components, styling and motion.
+- Follow the design standard exactly: tokens only, no stray values, every state designed (empty, loading, error, success).
+- Responsive at 390px, 768px and 1280px; nothing scrolls sideways. Hover, focus-visible, active and disabled states on every control.
+- Don't change API contracts. If a screen needs data the API doesn't give, add the smallest endpoint change with a test.
+- Meadow reviews the running app in a browser at desktop and phone width after this phase; unstyled or broken screens fail it.`,
+  qa: `You are the QA engineer on this team. You find bugs by using the app the way a real user would, then fix them.
+- Write tests that exercise real flows: unit tests for logic, API tests for every endpoint (including invalid input), and browser cases in ${E2E_FILE}.
+- Cover the happy path, empty states, validation errors, missing configuration and the phone layout.
+- When a test exposes a bug, fix the app. Never weaken, skip or delete a test to make it pass.
+
+${E2E_FORMAT}`,
+};
+
+function agentRole(phase: PlanPhase): string {
+  return phase.agent ? `\n# Your role on the team\n${AGENT_ROLE_TEXT[phase.agent]}` : "";
+}
+
+function envConstraint(plan: Plan): string[] {
+  const all = [...(plan.env?.required ?? []), ...(plan.env?.optional ?? [])];
+  if (!all.length) return [];
+  return [`Environment variables (read at runtime from .env.local, which the user fills in; never print, cat, grep or commit it, and never hardcode values): ${all.map(item => item.name).join(", ")}. List the same names without values in .env.example. When a value is missing, the app must start and show a clear "not configured" message instead of crashing; tests must not need the real values.`];
+}
+
 export type PhasePromptInput = {
   plan: Plan;
   phase: PlanPhase;
@@ -117,8 +149,10 @@ export function compilePhasePrompt(input: PhasePromptInput): string {
     ...plan.constraints,
     ...(plan.stack.length ? [`Stack: ${plan.stack.join(", ")}`] : []),
     ...(plan.services.length ? [`Services: ${plan.services.join(", ")}. Get them only through the Meadow tool request_cloud_resource; settings live in .env.local (never print or commit it).`] : []),
+    ...envConstraint(plan),
   ];
   return redact(render(loadTemplate("phase", input.projectPath), {
+    agent_role: agentRole(phase),
     goal: plan.goal,
     constraints: constraints.length ? constraints.map(item => `- ${item}`).join("\n") : "- None beyond the rules below.",
     project_rules: input.projectRules.trim() ? `\nProject rules:\n${input.projectRules.trim()}` : "",
@@ -151,6 +185,7 @@ export function compileFixPrompt(input: FixPromptInput): string {
   const n = input.tailLines ?? 60;
   const others = input.phase.checks.filter(check => check !== input.failing.check);
   return redact(render(loadTemplate("fix", input.projectPath), {
+    agent_role: agentRole(input.phase),
     phase_name: input.phase.name,
     attempt: input.attempt ? `${input.attempt.n} of ${input.attempt.max}` : "retry",
     tasks_as_checklist: input.phase.tasks.map(task => `- [ ] ${task}`).join("\n"),

@@ -105,6 +105,11 @@ stack: [nextjs, typescript, sqlite]
 constraints:
   - Do not add paid services
 services: [supabase]          # only hosted services the app truly needs; omit otherwise
+env:                          # only variables the app reads at runtime (API keys, base URLs); names only, never values
+  required:
+    - STRIPE_SECRET_KEY: "Stripe dashboard → Developers → API keys"
+  optional:
+    - SENTRY_DSN: "Error reporting; the app works without it"
 preview:                      # only for web apps; omit for CLIs/libraries
   command: npm run dev
   url: http://localhost:3000
@@ -124,6 +129,7 @@ phases:
   - id: 2
     name: Menu and cart
     depends_on: [1]
+    agent: ui                 # optional: backend | ui | qa — the specialist the engine plays for this phase
     tasks:
       - Menu page with items from a JSON file
       - Cart with add/remove and totals, with unit tests
@@ -140,6 +146,9 @@ const PLAN_RULES = `Rules:
 - 2-6 phases for a simple project; up to ${MAX_PHASES} for a complex one (several services, auth, database, payments, admin areas). Each phase is a coherent, independently verifiable step.
 - services: list only hosted services the app truly needs, and only ones shown under "Connected services" (supabase for a hosted Postgres database/auth/storage, docker for containers). Otherwise use local tools (SQLite, files). Meadow adds a "Connect services" phase first by itself; don't write one, and don't create cloud resources in your tasks. Never use github in services; Meadow creates and pushes the repository.
 - Phases after services may read SUPABASE_URL and SUPABASE_ANON_KEY from .env.local at runtime; checks must not need the network unless the app does.
+- env: list every variable the app reads at runtime that the user must supply (third-party API keys, model endpoints), each with a short hint on where to get it. Never write values. Meadow pauses before phase 1 until required ones are filled in .env.local. The app must still start and show a clear "not configured" message when one is missing, and checks/tests must never need the real values (mock the external API in tests).
+- agent: optionally give each phase a specialist role. backend for server/API/data work, ui for screens and styling, qa for a phase that writes and runs tests across real user flows. Complex projects should end with a qa phase.
+- Phases that change the UI of a web app with a preview block are reviewed in a real browser at desktop and phone width after their checks pass; set ui_gate: false only for a phase that intentionally ships no styling yet.
 
 - EVERY phase needs at least one runnable check. Check types: "cmd" (shell command, exit 0 = pass, optional expect_regex), "file_exists" (relative path), "http" (route on the preview URL returning 200; needs a preview block).
 - Prefer real build/test commands. If a phase adds behaviour, its tasks must include writing tests and its checks must run them.

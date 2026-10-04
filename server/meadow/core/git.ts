@@ -27,7 +27,7 @@ export async function git(cwd: string, ...args: string[]): Promise<string> {
   }
 }
 
-export const DEFAULT_GITIGNORE = ["node_modules/", ".env", ".env.*", "*.pem", "*.key", "dist/", "build/", ".next/", "__pycache__/", ".venv/", ".meadow/screenshots/", ".meadow/logs/", ".DS_Store", ""].join("\n");
+export const DEFAULT_GITIGNORE = ["node_modules/", ".env", ".env.*", "!.env.example", "*.pem", "*.key", "dist/", "build/", ".next/", "__pycache__/", ".venv/", ".meadow/screenshots/", ".meadow/logs/", ".DS_Store", ""].join("\n");
 
 export async function ensureRepo(cwd: string, baseBranch = "main") {
   fs.mkdirSync(cwd, { recursive: true });

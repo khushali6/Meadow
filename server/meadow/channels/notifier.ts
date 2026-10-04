@@ -119,6 +119,7 @@ export function formatEvent(event: MeadowEvent): Outgoing | null {
     case "setup": {
       const service = typeof p.service === "string" ? p.service : null;
       if (!service) return null;
+      if (service === "env") return { text: `🔑 ${event.title}\n${event.detail.slice(0, 1500)}\n\nDon't paste keys into this chat; put them in the file.`, urgent: true, buttons: pid ? [[{ text: "I've filled them in", callback_data: `resume:${pid}` }], [{ text: "Continue without them", callback_data: `envskip:${pid}` }]] : undefined };
       if (p.needsLogin) return { text: `🔌 ${event.title}\n${event.detail.slice(0, 800)}`, urgent: true, buttons: [[{ text: `Sign in to ${service}`, callback_data: `svclogin:${service}` }], ...(pid ? [[{ text: "Build without it", callback_data: `resume:${pid}` }]] : [])] };
       return { text: `${p.ok ? "✅" : "⚠️"} ${event.title}\n${event.detail.slice(0, 800)}`, urgent: !p.ok };
     }

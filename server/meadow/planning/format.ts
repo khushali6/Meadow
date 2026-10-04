@@ -5,6 +5,9 @@ export type Check =
   | { kind: "file_exists"; path: string }
   | { kind: "http"; path: string; expectStatus: number };
 
+export const AGENT_ROLES = ["backend", "ui", "qa"] as const;
+export type AgentRole = (typeof AGENT_ROLES)[number];
+
 export type PlanPhase = {
   id: string;
   name: string;
@@ -12,7 +15,15 @@ export type PlanPhase = {
   tasks: string[];
   checks: Check[];
   doneWhen: string;
+  /** Which specialist the engine plays for this phase. */
+  agent?: AgentRole;
+  /** false turns off the in-browser design review for this phase. */
+  uiGate?: boolean;
 };
+
+export type EnvVar = { name: string; hint: string };
+/** Environment variables the app reads from .env.local. Values never appear in the plan. */
+export type PlanEnv = { required: EnvVar[]; optional: EnvVar[] };
 
 export type Preview = { command: string; url: string; readyTimeoutS: number; routes: string[] };
 
@@ -36,6 +47,7 @@ export type Plan = {
   phases: PlanPhase[];
   /** Optional UI design spec. When present, Meadow generates a unique design brief before phase 1. */
   ui: UiConfig | null;
+  env: PlanEnv;
   body: string;
 };
 
@@ -230,7 +242,15 @@ export function parsePlan(markdown: string): ParseResult {
           }
         });
       }
-      phases.push({ id, name, dependsOn, tasks, checks, doneWhen });
+      let agent: AgentRole | undefined;
+      if (ph.agent !== undefined && ph.agent !== null) {
+        const role = String(ph.agent).trim().toLowerCase();
+        if ((AGENT_ROLES as readonly string[]).includes(role)) agent = role as AgentRole;
+        else err(getNode(node, "agent") ?? node, `${field}.agent`, `Unknown agent "${role}". Use one of: ${AGENT_ROLES.join(", ")}.`);
+      }
+      if (ph.ui_gate !== undefined && typeof ph.ui_gate !== "boolean") err(getNode(node, "ui_gate") ?? node, `${field}.ui_gate`, "`ui_gate` must be true or false.");
+      const uiGate = typeof ph.ui_gate === "boolean" ? ph.ui_gate : undefined;
+      phases.push({ id, name, dependsOn, tasks, checks, doneWhen, ...(agent ? { agent } : {}), ...(uiGate === undefined ? {} : { uiGate }) });
     });
   }
 
@@ -266,9 +286,59 @@ export function parsePlan(markdown: string): ParseResult {
     }
   }
 
+  const env = parseEnv(data.env, getNode(root, "env"), (node, field, message) => errors.push({ line: lineOf(node) ?? lineOf(root), field, message }));
+
   if (errors.length) return { ok: false, plan: null, errors, warnings };
   if (phases.length > MAX_PHASES) warnings.push({ line: lineOf(phasesNode), field: "phases", message: `${phases.length} phases is a lot; plans over ${MAX_PHASES} phases are hard to review. Consider splitting the project.` });
-  return { ok: true, plan: { project, goal, stack, constraints, services, preview, phases, ui, body: markdown.slice(match[0].length).trim() }, errors: [], warnings };
+  return { ok: true, plan: { project, goal, stack, constraints, services, preview, phases, ui, env, body: markdown.slice(match[0].length).trim() }, errors: [], warnings };
+}
+
+const ENV_NAME = /^[A-Z_][A-Z0-9_]{0,63}$/;
+
+/**
+ * `env:` is either a list (all required) or a mapping with `required` / `optional` lists. Each item is a bare
+ * name or a one-key mapping `NAME: "where to get it"`.
+ */
+function parseEnv(raw: unknown, node: YamlNode | undefined, err: (node: unknown, field: string, message: string) => void): PlanEnv {
+  const env: PlanEnv = { required: [], optional: [] };
+  if (raw === undefined || raw === null) return env;
+  const seen = new Set<string>();
+  const items = (value: unknown, field: string): EnvVar[] => {
+    if (value === undefined || value === null) return [];
+    if (!Array.isArray(value)) {
+      err(node, field, `\`${field}\` must be a list of variable names.`);
+      return [];
+    }
+    const out: EnvVar[] = [];
+    for (const item of value) {
+      let name = "";
+      let hint = "";
+      if (typeof item === "string") name = item.trim();
+      else if (item && typeof item === "object" && !Array.isArray(item) && Object.keys(item).length === 1) {
+        const [key, val] = Object.entries(item as Record<string, unknown>)[0];
+        name = key.trim();
+        hint = typeof val === "string" ? val.trim().slice(0, 300) : "";
+      }
+      if (!ENV_NAME.test(name)) {
+        err(node, field, `"${name || JSON.stringify(item)}" is not a valid environment variable name (use UPPER_SNAKE_CASE).`);
+        continue;
+      }
+      if (seen.has(name)) continue;
+      seen.add(name);
+      out.push({ name, hint });
+    }
+    return out;
+  };
+  if (Array.isArray(raw)) {
+    env.required = items(raw, "env");
+  } else if (typeof raw === "object") {
+    const map = raw as Record<string, unknown>;
+    env.required = items(map.required, "env.required");
+    env.optional = items(map.optional, "env.optional");
+  } else {
+    err(node, "env", "`env` must be a list of names or a mapping with `required` and `optional` lists.");
+  }
+  return env;
 }
 
 export function findCycle(phases: Pick<PlanPhase, "id" | "dependsOn">[]): string[] | null {

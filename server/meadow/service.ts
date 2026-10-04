@@ -13,10 +13,14 @@ import { activePlan, getProject, latestPlan, listProjects, phasesFor, planVersio
 export function planSummaryText(plan: Plan, version?: number): string {
   const lines = [`Plan${version ? ` v${version}` : ""} for ${plan.project}`, plan.goal, ""];
   executionOrder(plan.phases).forEach((phase, i) => {
-    lines.push(`${i + 1}. ${phase.name}`);
+    lines.push(`${i + 1}. ${phase.name}${phase.agent ? ` [${phase.agent}]` : ""}`);
     lines.push(`   checks: ${phase.checks.map(checkLabel).join(" · ")}`);
   });
   if (plan.preview) lines.push("", `Preview: ${plan.preview.command} → ${plan.preview.url}`);
+  const required = plan.env?.required ?? [];
+  const optional = plan.env?.optional ?? [];
+  if (required.length) lines.push("", `You'll fill in before phase 1 (in .env.local): ${required.map(item => item.name).join(", ")}`);
+  if (optional.length) lines.push(`Optional: ${optional.map(item => item.name).join(", ")}`);
   return lines.join("\n");
 }
 
