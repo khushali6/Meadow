@@ -1,5 +1,5 @@
 import { Toaster } from "@/components/ui/sonner";
-import { Activity, AlertTriangle, BookOpen, Wrench, Gauge, Boxes, Network, Radar, ChevronDown, FileText, FolderGit2, KeyRound, Leaf, Menu, MessageSquarePlus, Moon, Settings2, ShieldCheck, Sun } from "lucide-react";
+import { Activity, AlertTriangle, BookOpen, Wrench, Gauge, Boxes, Network, Radar, ChevronDown, FileText, FolderGit2, KeyRound, Leaf, Menu, MessageSquarePlus, Moon, Search, Settings2, ShieldCheck, Sun } from "lucide-react";
 import { useGSAP } from "@gsap/react";
 import { gsap } from "gsap";
 import { MotionConfig } from "motion/react";
@@ -9,6 +9,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 import { toast } from "sonner";
 import { useLocation } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
+import { CommandPalette } from "./components/CommandPalette";
 import { EmptyState } from "./components/common";
 import { ThemeProvider, useTheme } from "./contexts/ThemeContext";
 import { saveToken, useLiveEvents, useUnauthorized, type LiveEvent } from "./lib/api";
@@ -234,12 +235,14 @@ function Dashboard() {
         <div className="sidebar-spacer" />
         <div className="safety-card"><div className="safety-icon"><ShieldCheck size={15} /></div><div><strong>Local only</strong><span>Dashboard on 127.0.0.1. Engines work inside the project folder.</span></div></div>
       </aside>
+      <CommandPalette routes={[...NAV, { key: "/settings", label: "Runtime settings", icon: Settings2 }]} projects={projects} activeId={project?.id ?? null} onNavigate={go} onProject={id => openProject(id, location)} onToggleTheme={() => toggleTheme?.()} />
       {mobileNav ? <button className="mobile-overlay" onClick={() => setMobileNav(false)} aria-label="Close navigation" /> : null}
       <main className="main-canvas">
         <header className="topbar">
           <button className="mobile-menu icon-button" onClick={() => setMobileNav(true)} aria-label="Open navigation"><Menu size={19} /></button>
           <div className="breadcrumb"><span>Meadow</span><span className="crumb-separator">/</span>{project && (location === "/" || location === "/plans" || location === "/memory" || location === "/atlas" || location === "/map") ? <><span>{project.name}</span><span className="crumb-separator">/</span></> : null}<strong>{current.label}</strong></div>
           <div className="topbar-actions">
+            <button className="palette-trigger" onClick={() => window.dispatchEvent(new Event("meadow:palette"))} aria-label="Open the command menu"><Search size={13} /><span>Jump to…</span><kbd>⌘K</kbd></button>
             <div className={`status-inline ${connected ? "" : "offline"}`}><ActivityDot active={connected && anyRunning} tone={connected ? "idle" : "error"} /><span>{connected ? (anyRunning ? "EXECUTING · 127.0.0.1" : "CONNECTED · 127.0.0.1") : "RECONNECTING…"}</span></div>
             <button className="icon-button" onClick={() => toggleTheme?.()} aria-label="Toggle theme">{theme === "light" ? <Moon size={17} /> : <Sun size={17} />}</button>
           </div>

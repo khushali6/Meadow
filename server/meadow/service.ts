@@ -56,7 +56,14 @@ export function statusText(projectId: number): string {
   return parts.join(" ");
 }
 
-export type ProjectSummary = ProjectRow & { status: string; currentPhase: number; phaseCount: number; passed: number };
+export type ProjectSummary = ProjectRow & { status: string; currentPhase: number; phaseCount: number; passed: number; goal: string | null };
+
+/** The plan's goal (approved plan first, then the latest draft), so cards show a sentence rather than pasted plan text. */
+function planGoal(projectId: number): string | null {
+  const row = activePlan(projectId) ?? latestPlan(projectId);
+  const parsed = row ? parsePlan(row.raw_md) : null;
+  return parsed?.ok ? parsed.plan.goal : null;
+}
 
 function projectSummary(project: ProjectRow): ProjectSummary {
   const phases = orderedPhases(project.id);
@@ -64,7 +71,7 @@ function projectSummary(project: ProjectRow): ProjectSummary {
   const passed = phases.filter(phase => phase.status === "passed").length;
   const currentIndex = phases.findIndex(phase => !["passed", "skipped"].includes(phase.status));
   const status = harness.isActive(project.id) ? "running" : execution?.status ?? (latestPlan(project.id) ? (activePlan(project.id) ? "ready" : "draft") : "new");
-  return { ...project, status, currentPhase: currentIndex < 0 ? phases.length : currentIndex + 1, phaseCount: phases.length, passed };
+  return { ...project, status, currentPhase: currentIndex < 0 ? phases.length : currentIndex + 1, phaseCount: phases.length, passed, goal: planGoal(project.id) };
 }
 
 export function projectsOverview() {

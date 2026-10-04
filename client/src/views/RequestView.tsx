@@ -10,10 +10,16 @@ type Message = { id: number; from: "you" | "meadow"; text: string; buttons?: Cha
 
 const STORAGE_KEY = "meadow-chat";
 const EXAMPLES = [
-  "Build a habit tracker web app with streaks and a weekly view",
-  "Add a dark mode toggle to my portfolio project",
-  "The checkout page crashes when the cart is empty",
+  { kind: "New app", text: "Build a meeting-notes app that turns pasted notes into an action board with owners and due dates" },
+  { kind: "Feature", text: "Add a dark mode toggle to my portfolio project" },
+  { kind: "Bug", text: "The checkout page crashes when the cart is empty" },
 ];
+const STEPS = [
+  ["Ask", "Up to five short questions"],
+  ["Plan", "SPEC.md + PLAN.md with real checks"],
+  ["Approve", "Nothing runs until you say so"],
+  ["Build", "Phase by phase, verified, on Telegram"],
+] as const;
 
 function loadMessages(): Message[] {
   try {
@@ -35,7 +41,7 @@ export function RequestView({ onNavigate }: { onNavigate: (path: string) => void
 
   useEffect(() => {
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-80)));
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
+    if (messages.length) listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
   }, [messages]);
 
   const push = (message: Omit<Message, "id">) => setMessages(list => [...list, { ...message, id: Date.now() + Math.random() }]);
@@ -85,11 +91,25 @@ export function RequestView({ onNavigate }: { onNavigate: (path: string) => void
       <section className="panel chat-panel">
         <div className="chat-list" ref={listRef} aria-live="polite">
           {messages.length === 0 ? (
-            <div className="chat-empty">
-              <Bot size={22} />
-              <strong>Try one of these, or type your own</strong>
-              <div className="example-list">{EXAMPLES.map(example => <button key={example} className="example-chip" onClick={() => send(example)}>{example}</button>)}</div>
-              <span>Commands like /status, /projects, /pause and /help work here too, same as Telegram.</span>
+            <div className="chat-start">
+              <ol className="chat-steps">
+                {STEPS.map(([title, body], i) => (
+                  <motion.li key={title} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.06 * i, ease: [0.22, 1, 0.36, 1] }}>
+                    <span>{String(i + 1).padStart(2, "0")}</span><strong>{title}</strong><em>{body}</em>
+                  </motion.li>
+                ))}
+              </ol>
+              <div className="chat-start-label">Start from an example, or type your own below</div>
+              <div className="example-grid">
+                {EXAMPLES.map((example, i) => (
+                  <motion.button key={example.text} className="example-card" onClick={() => send(example.text)} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} whileHover={{ y: -2 }} whileTap={{ scale: 0.99 }} transition={{ duration: 0.4, delay: 0.24 + 0.08 * i, ease: [0.22, 1, 0.36, 1] }}>
+                    <span className="example-kind">{String(i + 1).padStart(2, "0")} / {example.kind}</span>
+                    <span className="example-text">{example.text}</span>
+                    <span className="example-go">Send <Send size={12} /></span>
+                  </motion.button>
+                ))}
+              </div>
+              <span className="chat-start-foot">Paste a full PLAN.md to skip the questions. Commands like /status, /projects, /pause and /help work here too, same as Telegram.</span>
             </div>
           ) : null}
           {messages.map(message => (

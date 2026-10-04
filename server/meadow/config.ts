@@ -55,6 +55,8 @@ export type MeadowConfig = {
    * the team report. `chain` is tried in order (unreachable or keyless providers are skipped); `models` overrides a
    * provider's default model (Ollama picks the closest installed Qwen coder when the named one isn't pulled).
    * parallel: phases sharing a `parallel_group` run at the same time in separate git worktrees.
+   * skills: SKILL.md files from ~/.meadow/skills are copied into each project and the coding engine is told to
+   * follow them (UI skills on UI work, others everywhere); `disabled` lists skill names to leave out.
    */
   harness: {
     maxAttempts: number;
@@ -68,6 +70,7 @@ export type MeadowConfig = {
     design: boolean;
     supervisor: { enabled: boolean; chain: ProviderId[]; models: Partial<Record<ProviderId, string>> };
     parallel: { enabled: boolean; maxAgents: number };
+    skills: { enabled: boolean; disabled: string[] };
   };
   budget: { phaseTokens: number; dailyTokens: number; phaseWallClockS: number };
   /** `hosted` talks to the Meadow bot through a relay (one-click connect); `own` uses a bot token you created. */
@@ -122,7 +125,7 @@ export const DEFAULT_CONFIG: MeadowConfig = {
   },
   memory: { embeddings: "local", embeddingProvider: null },
   engine: { default: "cursor", model: null, models: {}, runTimeoutS: 45 * 60, noOutputTimeoutS: 5 * 60, claudeUseFreeLlmApi: false, custom: { label: "Custom command", command: "" } },
-  harness: { maxAttempts: 3, checkTimeoutS: 600, massDeleteThreshold: 20, phaseGate: "auto", autoResume: false, autoVerify: true, preflightImpact: true, e2e: true, design: true, supervisor: { enabled: true, chain: ["ollama", "freellmapi", "anthropic"], models: { ollama: "qwen2.5-coder:7b" } }, parallel: { enabled: true, maxAgents: 3 } },
+  harness: { maxAttempts: 3, checkTimeoutS: 600, massDeleteThreshold: 20, phaseGate: "auto", autoResume: false, autoVerify: true, preflightImpact: true, e2e: true, design: true, supervisor: { enabled: true, chain: ["ollama", "freellmapi", "anthropic"], models: { ollama: "qwen2.5-coder:7b" } }, parallel: { enabled: true, maxAgents: 3 }, skills: { enabled: true, disabled: [] } },
   budget: { phaseTokens: 2_000_000, dailyTokens: 20_000_000, phaseWallClockS: 90 * 60 },
   telegram: { mode: "hosted", relayUrl: "", ownerId: null, notificationLevel: "all", quietHours: { enabled: false, start: 22, end: 8 }, voiceReplies: false },
   screenshots: { enabled: true },

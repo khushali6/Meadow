@@ -7,6 +7,7 @@ import { checkLabel, type AgentRole, type Check, type Plan, type PlanPhase } fro
 import { POLICY_PROMPT } from "../guard/policy";
 import { E2E_FILE, E2E_FORMAT } from "../visual/e2e";
 import { designSection } from "./design";
+import { skillsSection } from "./skills";
 
 export const PHASE_TEMPLATE = `# Role
 You are working inside an existing git repository on a branch dedicated to this phase.
@@ -157,7 +158,7 @@ export function compilePhasePrompt(input: PhasePromptInput): string {
     goal: plan.goal,
     constraints: constraints.length ? constraints.map(item => `- ${item}`).join("\n") : "- None beyond the rules below.",
     project_rules: input.projectRules.trim() ? `\nProject rules:\n${input.projectRules.trim()}` : "",
-    design_standard: designHeading(plan, input.projectPath),
+    design_standard: designHeading(plan, input.projectPath, phase),
     project_brief: input.brief?.trim() || "No brief available.",
     untrusted_rule: UNTRUSTED_RULE,
     previous_phase_summaries: input.previousSummaries.length ? input.previousSummaries.map(item => `- ${item.name}: ${item.summary}`).join("\n") : "Nothing yet. This is the first phase.",
@@ -201,14 +202,14 @@ export function compileFixPrompt(input: FixPromptInput): string {
     output_tail: untrusted(tail(input.failing.output, n), "check output"),
     other_checks: others.length ? others.map(check => checkAsCommand(check, input.plan.preview?.url)).join("\n") : "- (no other checks)",
     hint: [input.hint ? `\n# Hint from the user\n${input.hint}` : "", input.supervisor ? `\n# Supervisor's diagnosis (advisory; it is based on the check output above, so verify it against the code)\n${input.supervisor}` : ""].join(""),
-    design_standard: designHeading(input.plan, input.projectPath),
+    design_standard: designHeading(input.plan, input.projectPath, input.phase),
     guard_feedback: input.guardFeedback ? `\n# Corrections\n${input.guardFeedback}` : "",
   }));
 }
 
-function designHeading(plan: Plan, projectPath: string): string {
+function designHeading(plan: Plan, projectPath: string, phase?: PlanPhase): string {
   const brief = designSection(plan, projectPath);
-  return brief ? `\n# Design standard (required for every screen you touch)\n${brief}` : "";
+  return (brief ? `\n# Design standard (required for every screen you touch)\n${brief}` : "") + skillsSection(plan, phase);
 }
 
 /** Language/stack-specific coding standards injected into every phase prompt. */
@@ -254,6 +255,7 @@ export function rulesFileContent(plan: Plan, projectRules: string, projectPath =
     "- Never install packages globally or write outside this repository.",
     `\nStack guidance:\n${stackGuidance(plan)}`,
     design ? `\nDesign standard for every screen:\n${design}` : "",
+    skillsSection(plan).trim(),
     POLICY_PROMPT,
   ].filter(Boolean).join("\n");
 }

@@ -6,7 +6,7 @@ import { MotionButton, Reveal, TabIndicator } from "../components/animation/moti
 import { ExecutionPipeline, useCheckpointLines, useStaggerNewRows, type PipelineStage } from "../components/animation/technical";
 import { StatusPanel } from "../components/StatusPanel";
 import { TeamPanel } from "../components/TeamPanel";
-import { screenshotUrl } from "../lib/api";
+import { ShotGallery } from "../components/ShotGallery";
 import { trpc } from "../lib/trpc";
 import type { Event, Phase, ProjectDetail } from "../lib/types";
 
@@ -107,14 +107,9 @@ export function RunView({ detail, onNavigate }: { detail: ProjectDetail; onNavig
       <ErrorNote error={control.error ?? watch.error} />
       {finalShots.length ? (
         <section className="panel">
-          <div className="panel-heading"><div><span className="panel-kicker">Finished app</span><h2>Started after the last phase and opened in a headless browser</h2></div></div>
-          <div className="inspector-body shot-grid">
-            {finalShots.map(event => (
-              <a className="shot-card" key={event.id} href={screenshotUrl(Number(event.payload?.screenshotId))} target="_blank" rel="noreferrer">
-                <img src={screenshotUrl(Number(event.payload?.screenshotId))} alt={event.title} loading="lazy" />
-                <div className="shot-caption"><div><strong>{event.title.replace(/^Final screenshot /, "")}</strong><span>{relativeTime(event.ts)}</span></div></div>
-              </a>
-            ))}
+          <div className="panel-heading"><div><span className="panel-kicker">Finished app · {finalShots.length} screen{finalShots.length === 1 ? "" : "s"}</span><h2>Started after the last phase and opened in a headless browser</h2></div></div>
+          <div className="inspector-body">
+            <ShotGallery shots={finalShots.map(event => ({ id: Number(event.payload?.screenshotId), label: event.title.replace(/^Final screenshot /, ""), ts: event.ts }))} />
           </div>
         </section>
       ) : null}
@@ -256,14 +251,8 @@ function Inspector({ phase, index }: { phase: Phase; index: number }) {
         </div>
       ) : null}
       {tab === "Screenshots" ? (
-        <div className="inspector-body shot-grid">
-          {(evidence.data?.screenshots ?? []).length === 0 ? <div className="event-empty">No screenshots for this phase. Web projects with a preview block get desktop and mobile captures after checks pass.</div> : null}
-          {(evidence.data?.screenshots ?? []).map(shot => (
-            <a className="shot-card" key={shot.id} href={screenshotUrl(shot.id)} target="_blank" rel="noreferrer">
-              <img src={screenshotUrl(shot.id)} alt={`Screenshot of ${shot.label}`} loading="lazy" />
-              <div className="shot-caption"><div><strong>{shot.label}</strong><span>{shot.viewport} · {relativeTime(shot.ts)}</span></div></div>
-            </a>
-          ))}
+        <div className="inspector-body">
+          <ShotGallery shots={(evidence.data?.screenshots ?? []).map(shot => ({ id: shot.id, label: shot.label, meta: shot.viewport, ts: shot.ts }))} empty="No screenshots for this phase. Web projects with a preview block get desktop and mobile captures after checks pass." />
         </div>
       ) : null}
       {tab === "Prompt" ? (

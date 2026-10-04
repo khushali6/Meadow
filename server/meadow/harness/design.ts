@@ -15,6 +15,12 @@ export function isWebPlan(plan: Pick<Plan, "preview" | "stack"> & { goal?: strin
   return UI_GOAL.test(goal) && !NO_UI_GOAL.test(goal);
 }
 
+/** Free, well-maintained libraries the engine may use instead of hand-rolling every control. */
+export const APPROVED_LIBRARIES = `Use proven free libraries instead of hand-rolling complex controls, themed entirely from the tokens:
+- React: shadcn/ui (Radix primitives, copied into src/components/ui) for dialogs, menus, selects, tabs, tooltips, popovers, toasts; Sonner for toasts; cmdk for command menus; Lucide for icons; Recharts for charts.
+- Vue: Radix Vue / shadcn-vue. Svelte: Bits UI / shadcn-svelte. Plain HTML: native elements styled from the tokens.
+- No heavyweight kits with their own look (MUI, Ant Design, Bootstrap, Chakra) — the product must look like itself, not a template.`;
+
 export const DESIGN_STANDARD = `This is a product people will judge on sight. Build a premium, intentional UI — never browser defaults or a bare template.
 
 ## Tokens first
@@ -34,16 +40,16 @@ Inter Variable (or Geist / Manrope with system-ui fallback) for all text. JetBra
 Real page structure: header, max-width main column, sections on a grid. Consistent spacing from the scale, aligned edges. Recompose for phones (390px) — never shrink, never scroll sideways.
 
 ## Components
-Style every control from scratch (no UI component libraries). Buttons: primary (dark fill) + secondary (outline). Inputs: labels, padding, visible focus ring. Lists and tables: clear rows with hover states. Every interactive element has hover, focus-visible, active and disabled states. Designed empty states with a helpful message and the next action. Inline validation next to the field, calm error messages.
+${APPROVED_LIBRARIES}
+Buttons: primary (dark fill) + secondary (outline). Inputs: labels, padding, visible focus ring. Lists and tables: clear rows with hover states. Every interactive element has hover, focus-visible, active and disabled states. Designed empty states with a helpful message and the next action. Inline validation next to the field, calm error messages.
 
 ## Motion
-Purposeful and quick. Use the \`motion\` package (import from "motion/react") for React; plain CSS transitions elsewhere. Rules:
-- Page / route enter: FadeIn + 6px translateY, 220ms ease-out
-- Component mount: FadeIn, 180ms ease-out
-- List stagger: 40ms between items, SlideUp + FadeIn per item
-- Press / check feedback: ScalePop (scale 0.95 → 1.02 → 1), 200ms spring
-- Hover: CSS transition, 120ms ease-out, transform + color only
-- Nothing loops. Nothing bounces more than once. Always wrap in \`prefers-reduced-motion\` check.
+Animation shows state, progress, hierarchy or feedback — never decoration. One library per job:
+- Motion (\`motion/react\`): buttons, hover/press, dialogs, menus, drawers, AnimatePresence status changes, layout transitions.
+- GSAP (\`gsap\` + \`@gsap/react\` useGSAP): page-level choreography — hero/headline reveal, section transitions, ScrollTrigger storytelling.
+- Anime.js (\`animejs\`): technical visuals — SVG line drawing, timelines, staggered log/terminal rows, small activity indicators.
+Timing: hover/press 150–250ms, UI transitions 250–450ms, entrances 400–700ms, list stagger 40–80ms. Press scale 0.97–0.99, hover lift 1–2px. Ease-out or soft springs, never bouncy or elastic.
+Nothing loops except tiny activity indicators. Clean up timelines on unmount. Respect \`prefers-reduced-motion\` (keep opacity/state changes, drop movement). Lighter on phones.
 
 ## Accessibility
 Semantic HTML. Label on every field. 4.5:1 text contrast. Full keyboard reachability.
@@ -81,7 +87,8 @@ const BRIEF_SYSTEM = `You are a senior product designer. Your job is to write a 
 Rules:
 - Be specific: exact hex values, exact font names, exact millisecond values, exact easing curves.
 - Make it feel like a real, intentional brand — not a generic template. Derive a unique palette and visual character from the user's reference prompt.
-- Never recommend component libraries (no shadcn, MUI, Ant Design, etc.). Every component is built from first-principles with the tokens you define.
+- Components come from shadcn/ui (Radix) or the stack's equivalent, themed only through the tokens you define; never MUI, Ant Design, Bootstrap or Chakra.
+- Motion follows one library per job: Motion for React interactions, GSAP for page choreography, Anime.js for technical/SVG sequences.
 - Keep the output under 900 words. Use markdown headings and bullet lists. No preamble, no closing remarks.
 
 Output exactly these sections:
@@ -147,7 +154,7 @@ export async function generateUiDesignBrief(
       "",
       "---",
       "**Baseline rules that always apply:**",
-      "- Build every component from scratch; do not install UI component libraries.",
+      ...APPROVED_LIBRARIES.split("\n").map(line => (line.startsWith("-") ? line : `- ${line}`)),
       "- Every interactive element needs hover, focus-visible, active and disabled states.",
       `- Animations: use the \`${animLib}\` library. Always respect \`prefers-reduced-motion\`.`,
       "- Semantic HTML, labels on every field, keyboard reachable, 4.5:1 contrast minimum.",

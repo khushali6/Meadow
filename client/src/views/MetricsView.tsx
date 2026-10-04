@@ -1,5 +1,6 @@
 import { Activity } from "lucide-react";
 import { useState } from "react";
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { EmptyState, ErrorNote, PageHeader } from "../components/common";
 import { trpc } from "../lib/trpc";
 import type { ProjectSummary } from "../lib/types";
@@ -11,12 +12,40 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
   return <div className="metric-tile"><span>{label}</span><strong>{value}</strong>{hint ? <em>{hint}</em> : null}</div>;
 }
 
+type Day = { day: string; runs: number; failed: number; tokens: number };
+
+function ChartTip({ active, payload }: { active?: boolean; payload?: Array<{ payload: Day }> }) {
+  const day = payload?.[0]?.payload;
+  if (!active || !day) return null;
+  return <div className="chart-tip"><strong>{day.day}</strong><span>{day.runs} run{day.runs === 1 ? "" : "s"} · {day.failed} failed</span>{day.tokens ? <span>{day.tokens.toLocaleString()} tokens</span> : null}</div>;
+}
+
+/** Engine runs per day: completed in ink, failed in the error colour. */
+function RunsChart({ daily }: { daily: Day[] }) {
+  const data = daily.map(day => ({ ...day, completed: Math.max(0, day.runs - day.failed), label: day.day.slice(8) }));
+  const reduce = typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  return (
+    <div className="runs-chart" aria-label="Engine runs per day">
+      <div className="runs-chart-legend"><span><i className="ink" /> completed</span><span><i className="fail" /> failed</span></div>
+      <ResponsiveContainer width="100%" height={150}>
+        <BarChart data={data} margin={{ top: 6, right: 0, bottom: 0, left: -28 }} barCategoryGap="28%">
+          <CartesianGrid vertical={false} stroke="var(--line)" />
+          <XAxis dataKey="label" tickLine={false} axisLine={{ stroke: "var(--line-strong, #bdb6aa)" }} tick={{ fontSize: 10, fontFamily: "var(--mono, ui-monospace)", fill: "var(--muted)" }} />
+          <YAxis allowDecimals={false} tickLine={false} axisLine={false} tick={{ fontSize: 10, fontFamily: "var(--mono, ui-monospace)", fill: "var(--muted)" }} />
+          <Tooltip cursor={{ fill: "rgba(217,119,6,.08)" }} content={<ChartTip />} />
+          <Bar dataKey="completed" stackId="runs" fill="var(--ink)" isAnimationActive={!reduce} animationDuration={500} />
+          <Bar dataKey="failed" stackId="runs" fill="var(--error, #b94a48)" isAnimationActive={!reduce} animationDuration={500} />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
 export function MetricsView({ project }: { project: ProjectSummary | undefined }) {
   const [scope, setScope] = useState<"project" | "all">(project ? "project" : "all");
   const [days, setDays] = useState(14);
   const data = trpc.metrics.useQuery({ projectId: scope === "project" && project ? project.id : null, days }, { refetchInterval: 30_000 });
   const m = data.data;
-  const maxTokens = Math.max(1, ...(m?.daily.map(day => day.tokens) ?? [1]));
 
   return (
     <>
@@ -46,9 +75,7 @@ export function MetricsView({ project }: { project: ProjectSummary | undefined }
               <Stat label="Tokens" value={m.runs.tokens.toLocaleString()} hint={m.runs.costUsd ? `$${m.runs.costUsd} reported by engines` : "cost as reported by engines"} />
               <Stat label="Rate-limit waits" value={String(m.runs.rateLimitWaits)} hint="did not use attempts" />
             </div>
-            <div className="metric-bars" aria-label="Tokens per day">
-              {m.daily.map(day => <div key={day.day} className="metric-bar" title={`${day.day}: ${day.tokens.toLocaleString()} tokens, ${day.runs} runs, ${day.failed} failed`}><span style={{ height: `${(day.tokens / maxTokens) * 100}%` }} className={day.failed ? "has-failed" : ""} /><em>{day.day.slice(8)}</em></div>)}
-            </div>
+            <RunsChart daily={m.daily} />
             {m.runs.byEngine.length ? <table className="audit-table"><thead><tr><th>Engine</th><th>Runs</th><th>Completed</th><th>Tokens</th></tr></thead><tbody>{m.runs.byEngine.map(row => <tr key={row.engine}><td>{row.engine}</td><td>{row.runs}</td><td>{percent(row.runs ? row.completed / row.runs : null)}</td><td>{row.tokens.toLocaleString()}</td></tr>)}</tbody></table> : null}
             {m.runs.failureReasons.length ? <div className="metric-reasons">{m.runs.failureReasons.map(item => <span key={item.reason} className="capability no">{item.reason} · {item.count}</span>)}</div> : null}
           </section>

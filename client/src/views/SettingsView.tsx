@@ -199,6 +199,31 @@ const SUPERVISOR_OPTIONS: Array<{ id: SupervisorProvider; label: string; placeho
   { id: "anthropic", label: "Claude (Anthropic)", placeholder: "claude-sonnet-4-5", hint: "Paid cloud API, billed to your Anthropic key." },
 ];
 
+function SkillsSection({ skills: config, patch }: { skills: Settings["config"]["harness"]["skills"]; patch: (value: Patch) => void }) {
+  const utils = trpc.useUtils();
+  const list = trpc.skills.useQuery(undefined, { refetchOnWindowFocus: false });
+  const [source, setSource] = useState("");
+  const add = trpc.addSkill.useMutation({ onSuccess: () => { setSource(""); utils.skills.invalidate(); } });
+  const remove = trpc.removeSkill.useMutation({ onSuccess: () => utils.skills.invalidate() });
+  const disabled = new Set(config.disabled);
+  return (
+    <Section title="Skills" description="Instructions the coding engine follows on every project, like your UI and animation standards. UI skills apply to screens; others apply everywhere.">
+      <Row label="Use skills" hint={`Active skills are copied into each project's .meadow/skills/ and named in every phase prompt. Stored in ${list.data?.home ?? "~/.meadow/skills"}.`}><Toggle checked={config.enabled} onChange={value => patch({ harness: { skills: { enabled: value } } })} label="Use skills" /></Row>
+      {(list.data?.skills ?? []).map(skill => (
+        <Row key={skill.name} label={`${skill.name} · ${skill.scope === "ui" ? "UI work" : "every phase"}`} hint={skill.description || `${Math.round(skill.bytes / 1000)} KB`}>
+          <Toggle checked={!disabled.has(skill.name)} onChange={value => patch({ harness: { skills: { disabled: value ? config.disabled.filter(name => name !== skill.name) : [...config.disabled, skill.name] } } })} label={`Use the ${skill.name} skill`} />
+          <MotionButton className="button secondary" onClick={() => remove.mutate({ name: skill.name })}>Remove</MotionButton>
+        </Row>
+      ))}
+      <Row label="Add a skill" hint="Path to a SKILL.md, or a folder containing one (for example a Cursor skill). Meadow keeps its own copy.">
+        <input className="text-input" value={source} placeholder="~/path/to/skill/SKILL.md" aria-label="Skill path" onChange={event => setSource(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && source.trim()) add.mutate({ path: source.trim() }); }} />
+        <MotionButton className="button" disabled={!source.trim() || add.isPending} onClick={() => add.mutate({ path: source.trim() })}>{add.isPending ? "Adding…" : "Add"}</MotionButton>
+      </Row>
+      <ErrorNote error={add.error ?? remove.error} />
+    </Section>
+  );
+}
+
 function SupervisorChain({ supervisor, patch }: { supervisor: SupervisorConfig; patch: (value: Patch) => void }) {
   const status = trpc.teamStatus.useQuery(undefined, { refetchOnWindowFocus: false });
   const chain = supervisor.chain;
@@ -282,6 +307,8 @@ export function SettingsView({ settings, overview, project, onNavigate }: { sett
         <Row label="Parallel agents" hint="Phases the plan marks with the same parallel_group run at the same time, each in its own git worktree, then merge into main. A conflicting agent merges main into its branch and resolves the conflict itself."><Toggle checked={config.harness.parallel.enabled} onChange={value => patch({ harness: { parallel: { enabled: value } } })} label="Parallel agents" /></Row>
         <Row label="Agents at once"><NumberInput value={config.harness.parallel.maxAgents} min={1} onCommit={value => patch({ harness: { parallel: { maxAgents: Math.min(8, value) } } })} /></Row>
       </Section>
+
+      <SkillsSection skills={config.harness.skills} patch={patch} />
 
       <Section title="Automation" description="What Meadow does on its own. Plans, writes and destructive actions still wait for your approval.">
         <Row label="Keep graph and memory live" hint="Watches git every 20 s; changed files are re-indexed and the graph is rebuilt in one transaction."><Toggle checked={config.atlas.liveUpdate} onChange={value => patch({ atlas: { liveUpdate: value } })} label="Live graph" /></Row>

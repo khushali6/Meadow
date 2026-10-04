@@ -32,6 +32,7 @@ import { connectedServices, engineMcpStatus } from "../services/registry";
 import { checkEngineGuards, writeEngineGuards } from "../guard/engineConfig";
 import { classifyCommand, classifyMcpCall, type Verdict } from "../guard/policy";
 import { compileFixPrompt, compilePhasePrompt, rulesFileContent } from "./prompts";
+import { installSkills } from "./skills";
 import { generateProjectDocs } from "./docs";
 import { generateUiDesignBrief, isWebPlan } from "./design";
 import { copyEnvFiles, ENV_FILE, missingEnv, writeEnvScaffold } from "./env";
@@ -403,10 +404,9 @@ export class Harness {
         await git.checkout(project.path, project.base_branch);
       }
       if (!(await git.isClean(project.path))) throw new Error(`The working tree on ${project.base_branch} has uncommitted changes (${(await git.status(project.path)).slice(0, 5).map(entry => entry.path).join(", ")}). Commit or discard them, then resume.`);
-      if (state.engine.writeRules) {
-        state.engine.writeRules(project.path, rulesFileContent(plan, projectRules(project), project.path));
-        await git.commitAll(project.path, "meadow: update engine rules");
-      }
+      installSkills(project.path, plan);
+      if (state.engine.writeRules) state.engine.writeRules(project.path, rulesFileContent(plan, projectRules(project), project.path));
+      await git.commitAll(project.path, "meadow: update engine rules and skills");
       const base = await git.headSha(project.path);
       for (const phase of group) {
         const row = rowOf(phase);
@@ -414,6 +414,7 @@ export class Harness {
         const dir = worktreeDir(project, phase);
         await git.addWorktree(project.path, dir, branch, base);
         copyEnvFiles(project.path, dir);
+        installSkills(dir, plan);
         if (row.branch !== branch) this.setPhase(row, { branch });
       }
     } catch (error) {
@@ -576,10 +577,9 @@ export class Harness {
     if (!(await git.isClean(project.path))) {
       throw new Error(`The working tree on ${project.base_branch} has uncommitted changes (${(await git.status(project.path)).slice(0, 5).map(entry => entry.path).join(", ")}). Commit or discard them, then resume.`);
     }
-    if (state.engine.writeRules) {
-      state.engine.writeRules(project.path, rulesFileContent(plan, projectRules(project), project.path));
-      await git.commitAll(project.path, "meadow: update engine rules");
-    }
+    installSkills(project.path, plan);
+    if (state.engine.writeRules) state.engine.writeRules(project.path, rulesFileContent(plan, projectRules(project), project.path));
+    await git.commitAll(project.path, "meadow: update engine rules and skills");
     const baseSha = await git.headSha(project.path);
     await git.checkoutNewBranch(project.path, branchName);
     this.setPhase(row, { branch: branchName });

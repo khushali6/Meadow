@@ -5,6 +5,13 @@ import { trpc } from "../lib/trpc";
 import type { ProjectSummary, Settings } from "../lib/types";
 import { MotionButton, MotionDialog } from "../components/animation/motion";
 
+/** The plan goal, else the description unless it is pasted plan YAML. */
+function cardDescription(project: ProjectSummary): string {
+  if (project.goal) return project.goal;
+  const text = project.description?.trim() ?? "";
+  return text && !/^(-\s*)?(id|name|project|phases|tasks|depends_on):/m.test(text) ? text : "No plan goal yet";
+}
+
 export function ProjectsView({ projects, settings, activeId, onOpen }: { projects: ProjectSummary[]; settings: Settings | undefined; activeId: number | null; onOpen: (id: number, path?: string) => void }) {
   const [creating, setCreating] = useState(false);
   return (
@@ -16,8 +23,8 @@ export function ProjectsView({ projects, settings, activeId, onOpen }: { project
           <button className={`project-card ${project.id === activeId ? "active" : ""}`} key={project.id} onClick={() => onOpen(project.id, "/")}>
             <div className="project-card-top"><div className="project-symbol"><Leaf size={20} /></div><StatusTag status={project.status} /></div>
             <div className="project-name">{project.name}</div>
-            <p>{project.description || "No description"}</p>
-            <div className="project-meta"><span><FolderGit2 size={13} /> {project.path}</span><span><Bot size={13} /> {project.engine}</span></div>
+            <p>{cardDescription(project)}</p>
+            <div className="project-meta"><span title={project.path}><FolderGit2 size={13} /> {project.path.replace(/^\/Users\/[^/]+/, "~")}</span><span><Bot size={13} /> {project.engine}</span></div>
             <div className="project-card-divider" />
             <div className="project-card-footer"><span>{project.phaseCount ? `${project.passed}/${project.phaseCount} phases passed` : "No approved plan"}</span><span>{relativeTime(project.updated_at)}</span></div>
             <div className="mini-progress"><span style={{ width: `${project.phaseCount ? (project.passed / project.phaseCount) * 100 : 0}%` }} /></div>

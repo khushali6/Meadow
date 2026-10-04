@@ -25,6 +25,7 @@ import { assertSelectableEngine, engineInfo } from "./meadow/engines/registry";
 import { harness } from "./meadow/harness/runner";
 import { openWatchWindows } from "./meadow/harness/watch";
 import { teamStatus } from "./meadow/harness/orchestrator";
+import { addSkill, listSkills, removeSkill, skillsHome } from "./meadow/harness/skills";
 import { overlapsMeadow } from "./meadow/core/self";
 import { handleAction, handleText } from "./meadow/intake/conversation";
 import { improvePlan } from "./meadow/intake/llm";
@@ -58,7 +59,7 @@ const providerSettings = z.object({ baseUrl: z.string().url().max(300), model: z
 
 const configPatch = z.object({
   engine: z.object({ default: z.enum(["cursor", "claude_code", "codex", "gemini", "custom", "fake"]), model: z.string().nullable(), models: z.record(z.string(), z.string().max(120).nullable()), runTimeoutS: z.number().min(60).max(6 * 3600), noOutputTimeoutS: z.number().min(30).max(3600), claudeUseFreeLlmApi: z.boolean() }).partial().optional(),
-  harness: z.object({ maxAttempts: z.number().int().min(1).max(10), checkTimeoutS: z.number().min(10).max(7200), massDeleteThreshold: z.number().int().min(1), phaseGate: z.enum(["auto", "ask"]), autoResume: z.boolean(), autoVerify: z.boolean(), preflightImpact: z.boolean(), e2e: z.boolean(), design: z.boolean(), supervisor: z.object({ enabled: z.boolean(), chain: z.array(providerId).max(9), models: z.partialRecord(providerId, z.string().trim().max(120)) }).partial(), parallel: z.object({ enabled: z.boolean(), maxAgents: z.number().int().min(1).max(8) }).partial() }).partial().optional(),
+  harness: z.object({ maxAttempts: z.number().int().min(1).max(10), checkTimeoutS: z.number().min(10).max(7200), massDeleteThreshold: z.number().int().min(1), phaseGate: z.enum(["auto", "ask"]), autoResume: z.boolean(), autoVerify: z.boolean(), preflightImpact: z.boolean(), e2e: z.boolean(), design: z.boolean(), supervisor: z.object({ enabled: z.boolean(), chain: z.array(providerId).max(9), models: z.partialRecord(providerId, z.string().trim().max(120)) }).partial(), parallel: z.object({ enabled: z.boolean(), maxAgents: z.number().int().min(1).max(8) }).partial(), skills: z.object({ enabled: z.boolean(), disabled: z.array(z.string().max(48)).max(100) }).partial() }).partial().optional(),
   updates: z.object({ check: z.boolean() }).partial().optional(),
   budget: z.object({ phaseTokens: z.number().int().min(1000), dailyTokens: z.number().int().min(1000), phaseWallClockS: z.number().int().min(60) }).partial().optional(),
   telegram: z.object({ mode: z.enum(["hosted", "own"]), relayUrl: z.string().max(300), notificationLevel: z.enum(["all", "phases", "failures"]), quietHours: z.object({ enabled: z.boolean(), start: z.number().int().min(0).max(23), end: z.number().int().min(0).max(23) }), voiceReplies: z.boolean() }).partial().optional(),
@@ -294,6 +295,15 @@ export const appRouter = router({
   phaseEvidence: publicProcedure.input(z.object({ phaseId: z.number() })).query(({ input }) => phaseEvidence(input.phaseId)),
   phaseDiff: publicProcedure.input(z.object({ phaseId: z.number() })).query(({ input }) => phaseDiff(input.phaseId)),
   teamStatus: publicProcedure.query(() => teamStatus()),
+  skills: publicProcedure.query(() => ({ home: skillsHome(), skills: listSkills().map(({ file: _file, ...skill }) => skill) })),
+  addSkill: publicProcedure.input(z.object({ path: z.string().trim().min(1).max(1000) })).mutation(({ input }) => {
+    const { file: _file, ...skill } = addSkill(input.path);
+    return skill;
+  }),
+  removeSkill: publicProcedure.input(z.object({ name: z.string().max(48) })).mutation(({ input }) => {
+    removeSkill(input.name);
+    return { ok: true };
+  }),
 
   createProject: publicProcedure.input(z.object({ name: z.string().min(2).max(48), engine: z.string(), description: z.string().max(500).optional() })).mutation(({ input }) => createProject(input)),
   updateProject: publicProcedure.input(z.object({ id: z.number(), engine: z.string().optional(), screenshots: z.boolean().optional(), description: z.string().optional() })).mutation(({ input }) => {
