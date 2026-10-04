@@ -17,7 +17,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ghcr.io/your-org/meadow:latest    # replace with your registry
+    image: ghcr.io/khushali6/meadow:latest    # built locally from the Dockerfile above
     container_name: meadow
     restart: unless-stopped
     ports:

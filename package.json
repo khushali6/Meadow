@@ -3,6 +3,14 @@
   "version": "1.0.0",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/khushali6/Meadow.git"
+  },
+  "homepage": "https://github.com/khushali6/Meadow#readme",
+  "bugs": {
+    "url": "https://github.com/khushali6/Meadow/issues"
+  },
   "scripts": {
     "dev": "tsx watch server/cli.ts start --dev",
     "meadow": "tsx server/cli.ts",

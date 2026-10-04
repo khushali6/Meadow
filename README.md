@@ -7,6 +7,8 @@ Meadow turns a plain-language request (typed in the dashboard or sent to a Teleg
 - **It understands.** CodeAtlas builds a temporal graph of services, APIs, tables, owners, releases and incidents, answers questions with cited evidence, and traces the impact of a change before you make it.
 - **It asks before it acts.** Every tool has a risk level, writes wait for your approval, and every tool call is recorded in an audit log.
 
+> **Status: beta.** CI tests every commit on macOS, Linux and Windows, but expect rough edges. A working run needs a coding engine you're signed in to (the Cursor CLI is the most tested) and an agent model; a local Ollama supervisor wants about 16–24 GB of RAM, or use FreeLLMAPI or an API key instead. Please [open an issue](https://github.com/khushali6/Meadow/issues) when something breaks.
+
 The agent's own thinking (clarifying questions, specs, plans, summaries) uses the model provider you choose: a local gateway such as FreeLLMAPI, Ollama or LM Studio, or a cloud provider such as OpenAI, Anthropic, Gemini or OpenRouter. Memory never leaves your machine.
 
 ## How it works
@@ -37,9 +39,10 @@ Every new plan, whether it came from the dashboard, setup, CodeAtlas or a reques
 
 ## Quick start
 
-From a checkout, one command does everything before your first project:
+Get the code, then one command does everything before your first project:
 
 ```bash
+git clone https://github.com/khushali6/Meadow.git && cd Meadow
 ./startup.sh                        # macOS, Linux, WSL, Git Bash
 powershell -ExecutionPolicy Bypass -File .\startup.ps1   # Windows
 ```
