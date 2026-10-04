@@ -15,7 +15,16 @@ export function tempHome() {
   resetConfigCache();
   const db = new Db(":memory:");
   setDb(db);
-  return { root, db, cleanup: () => { setDb(null); fs.rmSync(root, { recursive: true, force: true }); } };
+  return { root, db, cleanup: () => { setDb(null); removeTemp(root); } };
+}
+
+/** Windows refuses to delete files a just-stopped process still holds; retry, then leave the temp folder to the OS. */
+export function removeTemp(dir: string) {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  } catch (error) {
+    if (process.platform !== "win32") throw error;
+  }
 }
 
 export function waitForEvent(predicate: (event: MeadowEvent) => boolean, timeoutMs = 20_000): Promise<MeadowEvent> {

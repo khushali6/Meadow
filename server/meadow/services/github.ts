@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { getSecret, homePath, loadConfig } from "../config";
 import * as git from "../core/git";
 import { capture } from "../core/exec";
@@ -32,7 +33,7 @@ async function api<T>(token: string, method: string, route: string, body?: unkno
   return { status: response.status, data: (await response.json().catch(() => ({}))) as T };
 }
 
-const validClone = (url: string) => /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\.git$/.test(url) || (process.env.MEADOW_GITHUB_API !== undefined && /^(\/|file:)/.test(url));
+const validClone = (url: string) => /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\.git$/.test(url) || (process.env.MEADOW_GITHUB_API !== undefined && (path.isAbsolute(url) || url.startsWith("file:")));
 
 /**
  * A private GitHub repository for a project that has no remote yet. Never touches a project that already has an

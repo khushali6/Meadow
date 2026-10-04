@@ -11,7 +11,7 @@ const MAX_SKILL_BYTES = 120_000;
 const NAME = /^[a-z0-9][a-z0-9_-]{0,47}$/;
 const UI_SKILL = /\b(ui|ux|design|interface|front-?end|animation|animations|motion|css|visual|typography|layout)\b/i;
 /** Where skills live inside a project; engines read them from here. */
-export const PROJECT_SKILLS_DIR = path.join(".meadow", "skills");
+export const PROJECT_SKILLS_DIR = ".meadow/skills";
 
 export const skillsHome = () => homePath("skills");
 

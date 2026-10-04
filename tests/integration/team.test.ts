@@ -174,7 +174,9 @@ describe("parallel agents", () => {
     await approvePlan(savePlanVersion(project.id, PARALLEL_PLAN(true)).id);
     const done = settled(project.id);
     await harness.start(project.id);
-    expect((await done).payload?.status).toBe("completed");
+    const finished = await done;
+    const why = getDb().all<{ title: string; detail: string }>("SELECT title, detail FROM events WHERE project_id = ? AND type IN ('phase_blocked','error','guard')", project.id);
+    expect(finished.payload?.status, JSON.stringify(why)).toBe("completed");
 
     expect(getDb().get("SELECT id FROM events WHERE project_id = ? AND title = 'UI agent is resolving a merge conflict with another agent'", project.id)).toBeTruthy();
     const resolution = engine.prompts.find(req => req.prompt.includes("That merge is now in progress in this worktree"));

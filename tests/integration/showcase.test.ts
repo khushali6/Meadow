@@ -2,13 +2,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { removeTemp } from "../helpers";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "meadow-showcase-"));
 process.env.MEADOW_HOME = path.join(dir, "home");
 process.env.MEADOW_PROJECTS_DIR = path.join(dir, "projects");
 process.env.MEADOW_NO_JSONL = "1";
 delete process.env.MEADOW_ENGINE;
-afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+afterAll(() => removeTemp(dir));
 
 const { detectLaunch, launchApp, printedUrls, serveStatic } = await import("../../server/meadow/visual/launch");
 const { findBrowser } = await import("../../server/meadow/visual/browser");

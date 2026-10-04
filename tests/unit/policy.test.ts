@@ -64,7 +64,7 @@ describe("engine command policy", () => {
     "rm -rf node_modules dist",
     "rm -rf ./build/*",
     `rm -rf ${path.join(project, "tmp")}`,
-    "rm -rf /tmp/meadow-test",
+    `rm -rf ${path.join(os.tmpdir(), "meadow-test")}`,
     // Shell functions using positional params like $1, $@, $* are safe — they are function arguments,
     // not named env-var expansions. Phase 5 screenshot helpers use this pattern.
     `cd ${project} && shot() { rm -rf .meadow-tmp-shots/p-$1; }`,

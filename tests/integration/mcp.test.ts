@@ -1,11 +1,13 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { removeTemp } from "../helpers";
 
 const repo = path.resolve(__dirname, "../..");
 const cli = ["--import", pathToFileURL(path.join(repo, "node_modules", "tsx", "dist", "loader.mjs")).href, path.join(repo, "server", "cli.ts")];
@@ -27,7 +29,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await client?.close();
-  fs.rmSync(root, { recursive: true, force: true });
+  removeTemp(root);
 });
 
 describe("meadow mcp", () => {
@@ -53,8 +55,11 @@ describe("meadow mcp", () => {
     const result = await call("create_issue", { title: "Cap payment retries", body: "Follow-up for INC-2041" });
     expect(result.json.pending.approvalId).toBeGreaterThan(0);
     const db = path.join(env.MEADOW_HOME, "meadow.db");
-    const row = execFileSync("sqlite3", [db, "SELECT a.status, p.status, a.actor FROM atlas_actions a JOIN approvals p ON p.id = a.approval_id ORDER BY a.id DESC LIMIT 1"], { encoding: "utf8" }).trim();
-    expect(row).toBe("pending|pending|mcp");
+    const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
+    const reader = new DatabaseSync(db, { readOnly: true });
+    const row = reader.prepare("SELECT a.status AS action, p.status AS approval, a.actor FROM atlas_actions a JOIN approvals p ON p.id = a.approval_id ORDER BY a.id DESC LIMIT 1").get();
+    reader.close();
+    expect(row).toEqual({ action: "pending", approval: "pending", actor: "mcp" });
   });
 
   it("returns tool errors instead of crashing", async () => {

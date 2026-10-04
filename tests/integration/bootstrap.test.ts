@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { removeTemp } from "../helpers";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "meadow-bootstrap-"));
 process.env.MEADOW_HOME = path.join(dir, "home");
@@ -23,7 +24,7 @@ esac
   { mode: 0o755 },
 );
 process.env.MEADOW_CURSOR_BIN = fakeCursor;
-afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+afterAll(() => removeTemp(dir));
 afterEach(() => vi.unstubAllGlobals());
 
 const boot = await import("../../server/meadow/setup/bootstrap");

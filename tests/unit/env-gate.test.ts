@@ -27,7 +27,7 @@ describe("environment gate", () => {
     const local = fs.readFileSync(path.join(project, ".env.local"), "utf8");
     expect(local).toMatch(/^FREELLM_API_KEY=$/m);
     expect(local).toMatch(/^SENTRY_DSN=$/m);
-    expect(fs.statSync(path.join(project, ".env.local")).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(fs.statSync(path.join(project, ".env.local")).mode & 0o777).toBe(0o600);
     expect(fs.readFileSync(path.join(project, ".env.example"), "utf8")).toContain("# freellmapi.com dashboard\nFREELLM_API_KEY=");
     expect(writeEnvScaffold(project, planEnv)).toEqual([]);
   });
