@@ -28,13 +28,13 @@ export class TelegramApi {
 
   constructor(private token: string, private base = "https://api.telegram.org", private retry = { attempts: 4, baseMs: 1000 }) {}
 
-  private async call<T>(method: string, body?: Record<string, unknown> | FormData, timeoutMs = 30_000): Promise<T> {
+  private async call<T>(method: string, body?: Record<string, unknown> | FormData, timeoutMs = 30_000, cancel?: AbortSignal): Promise<T> {
     const isForm = body instanceof FormData;
     const response = await fetch(`${this.base}/bot${this.token}/${method}`, {
       method: "POST",
       headers: isForm ? undefined : { "content-type": "application/json" },
       body: isForm ? body : JSON.stringify(body ?? {}),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: cancel ? AbortSignal.any([cancel, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
     });
     const data = (await response.json()) as { ok: boolean; result: T; description?: string; error_code?: number; parameters?: { retry_after?: number } };
     if (!data.ok) throw new TelegramError(data.description ?? `Telegram ${method} failed`, data.error_code, data.parameters?.retry_after);
@@ -69,8 +69,8 @@ export class TelegramApi {
     return this.call<{ id: number; username: string }>("getMe");
   }
 
-  getUpdates(offset: number, timeoutS = 25) {
-    return this.call<TgUpdate[]>("getUpdates", { offset, timeout: timeoutS, allowed_updates: ["message", "callback_query"] }, (timeoutS + 10) * 1000);
+  getUpdates(offset: number, timeoutS = 25, cancel?: AbortSignal) {
+    return this.call<TgUpdate[]>("getUpdates", { offset, timeout: timeoutS, allowed_updates: ["message", "callback_query"] }, (timeoutS + 10) * 1000, cancel);
   }
 
   sendMessage(chatId: number, text: string, buttons?: InlineButton[][], options: { silent?: boolean } = {}) {

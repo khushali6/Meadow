@@ -7,7 +7,7 @@ import { handleAction, handleDocument, handleText, type Reply } from "../intake/
 import { statusText } from "../service";
 import { captureOnDemand } from "../visual/ondemand";
 import { relayUrl, requestLink, unlinkDevice, type RelayLink } from "./relay";
-import { TelegramApi, type InlineButton, type TgUpdate } from "./telegramApi";
+import { TelegramApi, TelegramError, type InlineButton, type TgUpdate } from "./telegramApi";
 import { speak, transcribe } from "./voice";
 
 const CHANNEL = "telegram";
@@ -61,6 +61,7 @@ export class TelegramChannel {
   private retryTimer: NodeJS.Timeout | null = null;
   connection: { state: "connected" | "reconnecting" | "offline"; since: string; nextRetryAt: string | null } = { state: "offline", since: new Date().toISOString(), nextRetryAt: null };
   private generation = 0;
+  private polling: AbortController | null = null;
   private botName: string | null = null;
   lastError: string | null = null;
 
@@ -142,6 +143,8 @@ export class TelegramChannel {
   stop() {
     this.running = false;
     this.generation += 1;
+    this.polling?.abort();
+    this.polling = null;
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = null;
     this.setConnection("offline");
@@ -151,6 +154,8 @@ export class TelegramChannel {
   async repair(): Promise<boolean> {
     if (!this.credentials()) return false;
     if (this.running && this.connection.state === "connected") return true;
+    // Restarting mid-poll would open a second getUpdates, which Telegram rejects with 409 and makes things worse.
+    if (this.running || this.retryTimer) return false;
     this.stop();
     this.failures = 0;
     await this.start();
@@ -159,9 +164,11 @@ export class TelegramChannel {
 
   private async poll(generation: number) {
     let offset = Number(setting(this.offsetKey) ?? 0);
+    const polling = new AbortController();
+    this.polling = polling;
     while (this.running && this.api && generation === this.generation) {
       try {
-        const updates = await this.api.getUpdates(offset);
+        const updates = await this.api.getUpdates(offset, 25, polling.signal);
         this.lastError = null;
         this.failures = 0;
         this.setConnection("connected");
@@ -172,7 +179,9 @@ export class TelegramChannel {
           this.handle(update).catch(error => console.warn("[meadow] telegram handler error", redact((error as Error).message)));
         }
       } catch (error) {
-        this.lastError = redact((error as Error).message);
+        if (generation !== this.generation) return;
+        const conflict = error instanceof TelegramError && error.code === 409;
+        this.lastError = conflict ? "Another program is reading updates for this bot token (only one Meadow can use a bot at a time)" : redact((error as Error).message);
         const wait = backoffMs(this.failures++);
         this.setConnection("reconnecting", wait);
         await new Promise(resolve => setTimeout(resolve, wait));

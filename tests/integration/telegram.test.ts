@@ -116,3 +116,47 @@ describe("notification cards", () => {
     expect(wantsEvent(event("file_edit"))).toBe(true);
   });
 });
+
+describe("telegram connection repair", () => {
+  it("never runs two getUpdates at once, so a health repair can't cause a 409 reconnect loop", async () => {
+    let open = 0;
+    let maxOpen = 0;
+    let getMe = 0;
+    let failNext = true;
+    vi.stubGlobal("fetch", async (url: string, init: { signal?: AbortSignal }) => {
+      const method = url.split("/").pop()!;
+      if (method === "getMe") {
+        getMe += 1;
+        return new Response(JSON.stringify({ ok: true, result: { id: 1, username: "meadow_test_bot" } }));
+      }
+      if (failNext) {
+        failNext = false;
+        return new Response(JSON.stringify({ ok: false, error_code: 409, description: "Conflict: terminated by other getUpdates request" }));
+      }
+      open += 1;
+      maxOpen = Math.max(maxOpen, open);
+      try {
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(resolve, 400);
+          init.signal?.addEventListener("abort", () => { clearTimeout(timer); reject(new DOMException("aborted", "AbortError")); });
+        });
+      } finally {
+        open -= 1;
+      }
+      return new Response(JSON.stringify({ ok: true, result: [] }));
+    });
+    await channel.start();
+    await until(() => channel.connection.state === "reconnecting");
+    expect(channel.lastError).toMatch(/Another program/);
+    expect(await channel.repair()).toBe(false);
+    await until(() => open === 1);
+    await until(() => channel.connection.state === "connected");
+    expect(await channel.repair()).toBe(true);
+    await until(() => open === 1);
+    channel.stop();
+    await until(() => open === 0);
+    expect(open).toBe(0);
+    expect(maxOpen).toBe(1);
+    expect(getMe).toBe(1);
+  });
+});
