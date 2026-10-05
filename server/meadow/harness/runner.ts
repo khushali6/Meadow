@@ -135,7 +135,7 @@ const engineCapacity = () => {
 type Worktree = { dir: string; mainPath: string };
 
 /** Fails while any tracked file still has merge conflict markers. */
-const CONFLICT_CHECK: Check = { kind: "cmd", cmd: "if git grep -nIE '^(<<<<<<<|>>>>>>>)( |$)'; then echo 'Merge conflict markers are still in the files above.'; exit 1; fi" };
+const CONFLICT_CHECK: Check = { kind: "cmd", cmd: "node -e \"const m=['<','>'].map(c=>c.repeat(7));const out=require('child_process').spawnSync('git',['grep','-nI','-e',m[0],'-e',m[1]],{encoding:'utf8'}).stdout||'';const bad=out.split('\\n').filter(l=>{const t=l.split(':').slice(2).join(':').replace('\\r','');return m.some(k=>t===k||t.startsWith(k+' '))});if(bad.length){console.log(bad.join('\\n'));console.log('Merge conflict markers are still in the files above.');process.exit(1)}\"" };
 
 const slug = (text: string, max = 32) => text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, max);
 const phaseBranch = (phase: PlanPhase) => `meadow/phase-${phase.id}-${slug(phase.name)}`;

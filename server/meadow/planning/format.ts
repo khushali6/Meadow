@@ -77,7 +77,7 @@ export function servicesPhase(services: string[]): Record<string, unknown> | nul
     checks.push(
       { cmd: "git check-ignore -q .env.local" },
       { cmd: "node -e \"const s=require('fs').readFileSync('.env.local','utf8');process.exit(/^SUPABASE_URL=https:\\/\\/\\S+/m.test(s)&&/^SUPABASE_ANON_KEY=\\S+/m.test(s)?0:1)\"" },
-      { cmd: "grep -q SUPABASE_URL .env.example" },
+      { cmd: "node -e \"process.exit(/^SUPABASE_URL=/m.test(require('fs').readFileSync('.env.example','utf8'))?0:1)\"" },
     );
   }
   if (services.includes("docker")) {

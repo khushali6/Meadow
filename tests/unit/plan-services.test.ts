@@ -48,7 +48,7 @@ describe("built-in Connect services phase", () => {
     expect(parsed.plan.phases.map(phase => phase.id)).toEqual([SERVICES_PHASE_ID, "1", "2"]);
     const services = parsed.plan.phases[0];
     expect(services.tasks.join(" ")).toMatch(/request_cloud_resource/);
-    expect(services.checks.map(check => (check.kind === "cmd" ? check.cmd : ""))).toEqual(expect.arrayContaining(["git check-ignore -q .env.local", "grep -q SUPABASE_URL .env.example", "docker info --format '{{.ServerVersion}}'"]));
+    expect(services.checks.map(check => (check.kind === "cmd" ? check.cmd : ""))).toEqual(expect.arrayContaining(["git check-ignore -q .env.local", "node -e \"process.exit(/^SUPABASE_URL=/m.test(require('fs').readFileSync('.env.example','utf8'))?0:1)\"", "docker info --format '{{.ServerVersion}}'"]));
     expect(raw).toContain("Keep me.");
   });
 
