@@ -7,6 +7,8 @@
 ![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 ![Status](https://img.shields.io/badge/status-beta-orange)
 
+[![Watch the Meadow video](docs/media/meadow-brag.jpg)](docs/media/meadow-brag.mp4)
+
 Meadow runs on your own computer. You send a request from the dashboard or Telegram (text, voice or a `PLAN.md`), approve the plan, and Meadow drives a coding engine such as the Cursor CLI until every phase passes its checks. Your code, memory and keys stay on your machine.
 
 ## Highlights
